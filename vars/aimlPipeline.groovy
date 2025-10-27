@@ -8,7 +8,6 @@ def call(Map config = [:]) {
             stage('Setup Config') {
                 steps {
                     script {
-                        // ✅ Dynamically set environment variables safely
                         env.REPO = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
                         env.PYTHON_VERSION = config.PYTHON_VERSION ?: "3.11"
                         env.PYTHON_BIN = config.PYTHON_BIN ?: "/usr/bin/python3.11"
@@ -29,33 +28,20 @@ def call(Map config = [:]) {
                 }
             }
 
-            stage('Setup Environment') {
+            stage('Setup Environment & Dependencies') {
                 steps {
                     dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
                         sh '''
+                            echo "======================================"
+                            echo " Running setup_environment.sh"
+                            echo "======================================"
                             if [ -f setup_environment.sh ]; then
                                 chmod +x setup_environment.sh
                                 ./setup_environment.sh
                             else
-                                echo "⚠️ setup_environment.sh not found, skipping..."
+                                echo " setup_environment.sh not found. Please include it in the repository root."
+                                exit 1
                             fi
-                        '''
-                    }
-                }
-            }
-
-            stage('Install Python Dependencies') {
-                steps {
-                    dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                        sh '''#!/bin/bash
-                        set -e
-                        if [ ! -d "${VENV_DIR}" ]; then
-                            ${PYTHON_BIN} -m venv ${VENV_DIR}
-                        fi
-                        source ${VENV_DIR}/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                        pip install pytest pytest-cov pip-audit checkov awscli
                         '''
                     }
                 }
@@ -81,8 +67,7 @@ def call(Map config = [:]) {
                     stage('Trivy Filesystem Scan') {
                         steps {
                             dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                                sh '''#!/bin/bash
-                                set -e
+                                sh '''
                                 echo ">>> Running Trivy filesystem scan..."
                                 trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt
                                 trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
@@ -95,8 +80,7 @@ def call(Map config = [:]) {
                     stage('Python Dependency Audit') {
                         steps {
                             dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                                sh '''#!/bin/bash
-                                set -e
+                                sh '''
                                 source ${VENV_DIR}/bin/activate
                                 echo ">>> Auditing dependencies with pip-audit..."
                                 pip-audit -r requirements.txt -f json > pip-audit.json || true
@@ -109,8 +93,7 @@ def call(Map config = [:]) {
                     stage('Docker Build & Scan') {
                         steps {
                             dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                                sh '''#!/bin/bash
-                                set -e
+                                sh '''
                                 VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
                                 echo ">>> Building Docker image: ${DOCKER_IMAGE_NAME}:$VERSION"
                                 docker build -t ${DOCKER_IMAGE_NAME}:$VERSION .
@@ -134,18 +117,12 @@ def call(Map config = [:]) {
                         script {
                             withSonarQubeEnv("${env.SONARQUBE_ENV}") {
                                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
-                                    sh '''#!/bin/bash
+                                    sh '''
                                     set -e
-                                    echo ">>> Checking sonar-project.properties..."
+                                    echo ">>> Running SonarQube scan..."
                                     if [ ! -f sonar-project.properties ]; then
-                                        echo "❌ sonar-project.properties not found!"
-                                        exit 1
-                                    fi
-                                    echo ">>> Adding coverage path to sonar-project.properties..."
-                                    if ! grep -q "sonar.python.coverage.reportPaths" sonar-project.properties; then
                                         echo "sonar.python.coverage.reportPaths=coverage.xml" >> sonar-project.properties
                                     fi
-                                    echo ">>> Running SonarQube scan..."
                                     ${scannerHome}/bin/sonar-scanner \
                                         -Dsonar.host.url=$SONAR_HOST_URL \
                                         -Dsonar.login=$SONAR_TOKEN
@@ -157,15 +134,15 @@ def call(Map config = [:]) {
                 }
             }
 
-            stage('SonarQube Quality Gate Check') {
+            stage('Quality Gate Check') {
                 steps {
                     script {
                         timeout(time: 10, unit: 'MINUTES') {
                             def qg = waitForQualityGate()
                             if (qg.status != 'OK') {
-                                error "❌ SonarQube Quality Gate failed: ${qg.status}"
+                                error " SonarQube Quality Gate failed: ${qg.status}"
                             } else {
-                                echo "✅ SonarQube Quality Gate passed: ${qg.status}"
+                                echo " SonarQube Quality Gate passed!"
                             }
                         }
                     }
@@ -176,23 +153,19 @@ def call(Map config = [:]) {
                 steps {
                     withCredentials([usernamePassword(credentialsId: "${env.DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                            sh '''#!/bin/bash
-                            set -e
+                            sh '''
                             VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
                             echo ">>> Logging into DockerHub..."
                             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                             docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
                             docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
-                            echo ">>> Pushing Docker image..."
                             docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
                             docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
                             docker logout
 
                             echo ">>> Running container..."
                             CONTAINER="api-gateway-$VERSION"
-                            if docker ps -a | grep -q $CONTAINER; then
-                                docker rm -f $CONTAINER
-                            fi
+                            docker rm -f $CONTAINER || true
                             docker run -d --name $CONTAINER -p 8000:8000 ${DOCKER_IMAGE_NAME}:$VERSION
                             docker ps -a
                             '''
@@ -204,7 +177,7 @@ def call(Map config = [:]) {
 
         post {
             always {
-                echo "🧹 Cleaning workspace..."
+                echo " Cleaning workspace..."
                 cleanWs()
             }
         }
