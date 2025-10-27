@@ -3,23 +3,28 @@ def call(Map config = [:]) {
     pipeline {
         agent any
 
-        environment {
-            REPO = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
-            PYTHON_VERSION = config.PYTHON_VERSION ?: "3.11"
-            PYTHON_BIN = config.PYTHON_BIN ?: "/usr/bin/python3.11"
-            GIT_CREDENTIALS = config.GIT_CREDENTIALS ?: "git-access"
-            VENV_DIR = config.VENV_DIR ?: "${WORKSPACE}/myenv"
-            SONARQUBE_ENV = config.SONARQUBE_ENV ?: "SonarQube-Server"
-            DOCKER_IMAGE_NAME = config.DOCKER_IMAGE_NAME ?: "api-gateway"
-            DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
-        }
-
         stages {
+
+            stage('Setup Config') {
+                steps {
+                    script {
+                        // ✅ Dynamically set environment variables safely
+                        env.REPO = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
+                        env.PYTHON_VERSION = config.PYTHON_VERSION ?: "3.11"
+                        env.PYTHON_BIN = config.PYTHON_BIN ?: "/usr/bin/python3.11"
+                        env.GIT_CREDENTIALS = config.GIT_CREDENTIALS ?: "git-access"
+                        env.VENV_DIR = config.VENV_DIR ?: "${WORKSPACE}/myenv"
+                        env.SONARQUBE_ENV = config.SONARQUBE_ENV ?: "SonarQube-Server"
+                        env.DOCKER_IMAGE_NAME = config.DOCKER_IMAGE_NAME ?: "api-gateway"
+                        env.DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
+                    }
+                }
+            }
 
             stage('Checkout Repository') {
                 steps {
                     dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
-                        git branch: 'master', credentialsId: "${GIT_CREDENTIALS}", url: "${REPO}"
+                        git branch: 'master', credentialsId: "${env.GIT_CREDENTIALS}", url: "${env.REPO}"
                     }
                 }
             }
@@ -127,7 +132,7 @@ def call(Map config = [:]) {
                 steps {
                     dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
                         script {
-                            withSonarQubeEnv("${SONARQUBE_ENV}") {
+                            withSonarQubeEnv("${env.SONARQUBE_ENV}") {
                                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                                     sh '''#!/bin/bash
                                     set -e
@@ -169,7 +174,7 @@ def call(Map config = [:]) {
 
             stage('Push & Run Docker Image') {
                 steps {
-                    withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    withCredentials([usernamePassword(credentialsId: "${env.DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
                         dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
                             sh '''#!/bin/bash
                             set -e
