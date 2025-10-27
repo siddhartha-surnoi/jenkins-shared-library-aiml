@@ -8,7 +8,7 @@ def call(Map config = [:]) {
             stage('Setup Config') {
                 steps {
                     script {
-                        // ✅ Dynamically set environment variables safely
+                        //  Dynamically set environment variables safely
                         env.REPO = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
                         env.PYTHON_VERSION = config.PYTHON_VERSION ?: "3.11"
                         env.PYTHON_BIN = config.PYTHON_BIN ?: "/usr/bin/python3.11"
@@ -38,7 +38,7 @@ def call(Map config = [:]) {
                             chmod +x setup_environment.sh
                             ./setup_environment.sh || true
                         else
-                            echo "⚠️ setup_environment.sh not found, skipping..."
+                            echo " setup_environment.sh not found, skipping..."
                         fi
                         set -e
                         '''
@@ -140,7 +140,7 @@ def call(Map config = [:]) {
                                     set -e
                                     echo ">>> Checking sonar-project.properties..."
                                     if [ ! -f sonar-project.properties ]; then
-                                        echo "❌ sonar-project.properties not found!"
+                                        echo " sonar-project.properties not found!"
                                         exit 1
                                     fi
                                     echo ">>> Adding coverage path to sonar-project.properties..."
@@ -165,9 +165,9 @@ def call(Map config = [:]) {
                         timeout(time: 10, unit: 'MINUTES') {
                             def qg = waitForQualityGate()
                             if (qg.status != 'OK') {
-                                error "❌ SonarQube Quality Gate failed: ${qg.status}"
+                                error " SonarQube Quality Gate failed: ${qg.status}"
                             } else {
-                                echo "✅ SonarQube Quality Gate passed: ${qg.status}"
+                                echo " SonarQube Quality Gate passed: ${qg.status}"
                             }
                         }
                     }
@@ -206,7 +206,7 @@ def call(Map config = [:]) {
 
         post {
             always {
-                echo "🧹 Cleaning workspace..."
+                echo " Cleaning workspace..."
                 cleanWs()
             }
         }
