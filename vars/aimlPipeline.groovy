@@ -1,122 +1,207 @@
-
-// vars/aimlPipeline.groovy
 def call(Map config = [:]) {
-    // config keys:
-    // REPO (required), SERVICE_NAME (required), GIT_CREDENTIALS (default: "git-access"),
-    // PYTHON_BIN (optional), VENV_DIR (optional)
 
     pipeline {
         agent any
 
         environment {
-            REPO = config.REPO ?: ""
-            SERVICE_NAME = config.SERVICE_NAME ?: ""
-            GIT_CREDENTIALS = config.GIT_CREDENTIALS ?: "git-access"
+            REPO = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
+            PYTHON_VERSION = config.PYTHON_VERSION ?: "3.11"
             PYTHON_BIN = config.PYTHON_BIN ?: "/usr/bin/python3.11"
+            GIT_CREDENTIALS = config.GIT_CREDENTIALS ?: "git-access"
             VENV_DIR = config.VENV_DIR ?: "${WORKSPACE}/myenv"
+            SONARQUBE_ENV = config.SONARQUBE_ENV ?: "SonarQube-Server"
+            DOCKER_IMAGE_NAME = config.DOCKER_IMAGE_NAME ?: "api-gateway"
+            DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
         }
 
         stages {
-            stage('Validate Input') {
-                steps {
-                    script {
-                        if (!REPO?.trim() || !SERVICE_NAME?.trim()) {
-                            error "Missing required parameters: REPO and SERVICE_NAME must be provided."
-                        }
-                        echo "Running pipeline for service: ${SERVICE_NAME}"
-                    }
-                }
-            }
 
             stage('Checkout Repository') {
                 steps {
-                    dir("${WORKSPACE}/${SERVICE_NAME}") {
-                        checkout([$class: 'GitSCM',
-                            branches: [[name: '*/master']],
-                            doGenerateSubmoduleConfigurations: false,
-                            userRemoteConfigs: [[url: "${REPO}", credentialsId: "${GIT_CREDENTIALS}"]]
-                        ])
+                    dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                        git branch: 'master', credentialsId: "${GIT_CREDENTIALS}", url: "${REPO}"
                     }
                 }
             }
 
-            stage('Setup Python Environment') {
+            stage('Setup Environment') {
                 steps {
-                    dir("${WORKSPACE}/${SERVICE_NAME}") {
-                        sh '''#!/bin/bash
-                        set -e
-                        echo "🐍 Creating/activating venv at ${VENV_DIR}"
-                        if [ ! -d "${VENV_DIR}" ]; then
-                            ${PYTHON_BIN} -m venv ${VENV_DIR}
-                        fi
-                        source ${VENV_DIR}/bin/activate
-                        pip install --upgrade pip
-                        if [ -f requirements.txt ]; then
-                            pip install -r requirements.txt
-                        else
-                            echo "⚠️ requirements.txt not found — skipping pip install -r requirements.txt"
-                        fi
+                    dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                        sh '''
+                            if [ -f setup_environment.sh ]; then
+                                chmod +x setup_environment.sh
+                                ./setup_environment.sh
+                            else
+                                echo "⚠️ setup_environment.sh not found, skipping..."
+                            fi
                         '''
                     }
                 }
             }
 
-            stage('Service-specific setup') {
+            stage('Install Python Dependencies') {
                 steps {
-                    dir("${WORKSPACE}/${SERVICE_NAME}") {
-                        script {
-                            if (SERVICE_NAME == "AIML-testcase") {
+                    dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                        sh '''#!/bin/bash
+                        set -e
+                        if [ ! -d "${VENV_DIR}" ]; then
+                            ${PYTHON_BIN} -m venv ${VENV_DIR}
+                        fi
+                        source ${VENV_DIR}/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install pytest pytest-cov pip-audit checkov awscli
+                        '''
+                    }
+                }
+            }
+
+            stage('Parallel Execution') {
+                parallel {
+
+                    stage('Run Tests & Coverage') {
+                        steps {
+                            dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
                                 sh '''#!/bin/bash
                                 set -e
                                 source ${VENV_DIR}/bin/activate
-                                echo "📦 Installing spaCy model for AIML-testcase"
-                                python -m spacy download en_core_web_md
+                                echo ">>> Running tests with coverage..."
+                                pytest --cov=app --cov=gateway --cov-report=xml:coverage.xml --cov-report=term
                                 '''
-                            } else {
-                                echo "No service-specific setup required for ${SERVICE_NAME}"
                             }
+                            archiveArtifacts artifacts: 'API-Gateway-AIML-Microservice/coverage.xml', allowEmptyArchive: true
+                        }
+                    }
+
+                    stage('Trivy Filesystem Scan') {
+                        steps {
+                            dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                                sh '''#!/bin/bash
+                                set -e
+                                echo ">>> Running Trivy filesystem scan..."
+                                trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt
+                                trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
+                                '''
+                            }
+                            archiveArtifacts artifacts: 'API-Gateway-AIML-Microservice/trivy-fs-*.txt', allowEmptyArchive: true
+                        }
+                    }
+
+                    stage('Python Dependency Audit') {
+                        steps {
+                            dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                                sh '''#!/bin/bash
+                                set -e
+                                source ${VENV_DIR}/bin/activate
+                                echo ">>> Auditing dependencies with pip-audit..."
+                                pip-audit -r requirements.txt -f json > pip-audit.json || true
+                                '''
+                            }
+                            archiveArtifacts artifacts: 'API-Gateway-AIML-Microservice/pip-audit.json', allowEmptyArchive: true
+                        }
+                    }
+
+                    stage('Docker Build & Scan') {
+                        steps {
+                            dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                                sh '''#!/bin/bash
+                                set -e
+                                VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
+                                echo ">>> Building Docker image: ${DOCKER_IMAGE_NAME}:$VERSION"
+                                docker build -t ${DOCKER_IMAGE_NAME}:$VERSION .
+                                echo ">>> Scanning Docker image..."
+                                trivy image --exit-code 0 --severity HIGH,CRITICAL ${DOCKER_IMAGE_NAME}:$VERSION | tee trivy-image-scan.txt
+                                trivy image --format json -o trivy-image-report.json ${DOCKER_IMAGE_NAME}:$VERSION || true
+                                '''
+                            }
+                            archiveArtifacts artifacts: 'API-Gateway-AIML-Microservice/trivy-image-*', allowEmptyArchive: true
                         }
                     }
                 }
             }
 
-            stage('Run Microservice (background)') {
+            stage('SonarQube Scan') {
+                environment {
+                    scannerHome = tool 'sonar-7.2'
+                }
                 steps {
-                    dir("${WORKSPACE}/${SERVICE_NAME}") {
+                    dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
                         script {
-                            def runCmd = ""
-                            if (SERVICE_NAME == "API-Gateway-AIML-Microservice") {
-                                runCmd = "${VENV_DIR}/bin/python gateway.py > api_gateway.logs 2>&1 &"
-                            } else if (SERVICE_NAME == "AIML-testcase") {
-                                runCmd = "${VENV_DIR}/bin/python Integration.py > aiml-testcases.logs 2>&1 &"
-                            } else if (SERVICE_NAME == "jobtestcase") {
-                                runCmd = "${VENV_DIR}/bin/python integration.py > jobtestcases.logs 2>&1 &"
-                            } else if (SERVICE_NAME == "Feed-AIML-Microservice") {
-                                runCmd = "${VENV_DIR}/bin/python app_main.py > Feed-AIML.logs 2>&1 &"
-                            } else {
-                                error "Unknown SERVICE_NAME: ${SERVICE_NAME}"
+                            withSonarQubeEnv("${SONARQUBE_ENV}") {
+                                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                                    sh '''#!/bin/bash
+                                    set -e
+                                    echo ">>> Checking sonar-project.properties..."
+                                    if [ ! -f sonar-project.properties ]; then
+                                        echo "❌ sonar-project.properties not found!"
+                                        exit 1
+                                    fi
+                                    echo ">>> Adding coverage path to sonar-project.properties..."
+                                    if ! grep -q "sonar.python.coverage.reportPaths" sonar-project.properties; then
+                                        echo "sonar.python.coverage.reportPaths=coverage.xml" >> sonar-project.properties
+                                    fi
+                                    echo ">>> Running SonarQube scan..."
+                                    ${scannerHome}/bin/sonar-scanner \
+                                        -Dsonar.host.url=$SONAR_HOST_URL \
+                                        -Dsonar.login=$SONAR_TOKEN
+                                    '''
+                                }
                             }
-
-                            sh """#!/bin/bash
-                            set -e
-                            source ${VENV_DIR}/bin/activate
-                            nohup ${runCmd} || true
-                            sleep 3
-                            echo "=== Last 20 lines of logs (if created) ==="
-                            ls -1 *.logs || true
-                            tail -n 20 *.logs || true
-                            """
                         }
                     }
                 }
             }
-        } // stages
+
+            stage('SonarQube Quality Gate Check') {
+                steps {
+                    script {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def qg = waitForQualityGate()
+                            if (qg.status != 'OK') {
+                                error "❌ SonarQube Quality Gate failed: ${qg.status}"
+                            } else {
+                                echo "✅ SonarQube Quality Gate passed: ${qg.status}"
+                            }
+                        }
+                    }
+                }
+            }
+
+            stage('Push & Run Docker Image') {
+                steps {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        dir("${WORKSPACE}/API-Gateway-AIML-Microservice") {
+                            sh '''#!/bin/bash
+                            set -e
+                            VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
+                            echo ">>> Logging into DockerHub..."
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                            docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
+                            docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
+                            echo ">>> Pushing Docker image..."
+                            docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
+                            docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
+                            docker logout
+
+                            echo ">>> Running container..."
+                            CONTAINER="api-gateway-$VERSION"
+                            if docker ps -a | grep -q $CONTAINER; then
+                                docker rm -f $CONTAINER
+                            fi
+                            docker run -d --name $CONTAINER -p 8000:8000 ${DOCKER_IMAGE_NAME}:$VERSION
+                            docker ps -a
+                            '''
+                        }
+                    }
+                }
+            }
+        }
 
         post {
             always {
-                echo "Cleaning workspace..."
+                echo "🧹 Cleaning workspace..."
                 cleanWs()
             }
         }
-    } // pipeline
+    }
 }
