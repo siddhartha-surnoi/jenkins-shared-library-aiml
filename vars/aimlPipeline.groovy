@@ -51,48 +51,48 @@ def call(Map config = [:]) {
                 }
             }
 
-            // stage('Setup Environment') {
-            //     steps {
-            //         dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-            //             sh '''#!/bin/bash
-            //             set +e
-            //             if [ -f setup_environment.sh ]; then
-            //                 chmod +x setup_environment.sh
-            //                 ./setup_environment.sh || true
-            //             else
-            //                 echo "setup_environment.sh not found, skipping..."
-            //             fi
-            //             set -e
-            //             '''
-            //         }
-            //     }
-            // }
+            stage('Setup Environment') {
+                steps {
+                    dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+                        sh '''#!/bin/bash
+                        set +e
+                        if [ -f setup_environment.sh ]; then
+                            chmod +x setup_environment.sh
+                            ./setup_environment.sh || true
+                        else
+                            echo "setup_environment.sh not found, skipping..."
+                        fi
+                        set -e
+                        '''
+                    }
+                }
+            }
 
-            // stage('Install Dependencies & Tools') {
-            //     steps {
-            //         dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-            //             sh '''#!/bin/bash
-            //             set -e
-            //             echo "Installing Python dependencies and security tools..."
-            //             if [ ! -d "$VENV_DIR" ]; then
-            //                 $PYTHON_BIN -m venv $VENV_DIR
-            //             fi
-            //             source $VENV_DIR/bin/activate
-            //             pip install --upgrade pip
-            //             pip install -r requirements.txt
-            //             pip install pytest pytest-cov pip-audit awscli
+            stage('Install Dependencies & Tools') {
+                steps {
+                    dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+                        sh '''#!/bin/bash
+                        set -e
+                        echo "Installing Python dependencies and security tools..."
+                        if [ ! -d "$VENV_DIR" ]; then
+                            $PYTHON_BIN -m venv $VENV_DIR
+                        fi
+                        source $VENV_DIR/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install pytest pytest-cov pip-audit awscli
 
-            //             echo "Installing Trivy..."
-            //             if ! command -v trivy &> /dev/null; then
-            //                 apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
-            //                 wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-            //                 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
-            //                 apt-get update && apt-get install -y trivy
-            //             fi
-            //             '''
-            //         }
-            //     }
-            // }
+                        echo "Installing Trivy..."
+                        if ! command -v trivy &> /dev/null; then
+                            apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
+                            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+                            echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
+                            apt-get update && apt-get install -y trivy
+                        fi
+                        '''
+                    }
+                }
+            }
 
             stage('Parallel Quality & Security Checks') {
                 parallel {
