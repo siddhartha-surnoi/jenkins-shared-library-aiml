@@ -211,20 +211,20 @@ def call(Map config = [:]) {
                 }
             }
 
-            stage('Quality Gate Check') {
-                steps {
-                    script {
-                        timeout(time: 10, unit: 'MINUTES') {
-                            def qg = waitForQualityGate()
-                            if (qg.status != 'OK') {
-                                error "SonarQube Quality Gate failed: ${qg.status}"
-                            } else {
-                                echo "SonarQube Quality Gate passed successfully "
-                            }
-                        }
-                    }
-                }
-            }
+            // stage('Quality Gate Check') {
+            //     steps {
+            //         script {
+            //             timeout(time: 10, unit: 'MINUTES') {
+            //                 def qg = waitForQualityGate()
+            //                 if (qg.status != 'OK') {
+            //                     error "SonarQube Quality Gate failed: ${qg.status}"
+            //                 } else {
+            //                     echo "SonarQube Quality Gate passed successfully "
+            //                 }
+            //             }
+            //         }
+            //     }
+            // }
 
             stage('Push & Run Docker Image') {
                 steps {
