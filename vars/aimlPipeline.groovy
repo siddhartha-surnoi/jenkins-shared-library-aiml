@@ -90,37 +90,37 @@ def call(Map config = [:]) {
             // ================================================================
             // 3️ Python Virtual Environment Setup
             // ================================================================
-            stage(' Setup Python Environment') {
-                steps {
-                    dir("${WORKSPACE}/${SERVICE_NAME}") {
-                        script {
-                            sh '''
-                                #!/bin/bash
-                                set -e
-                                echo " Creating virtual environment..."
-                                ${PYTHON_BIN} -m venv ${VENV_DIR}
-                                source ${VENV_DIR}/bin/activate
-                                pip install --upgrade pip
-                                if [ -f requirements.txt ]; then
-                                    pip install -r requirements.txt
-                                else
-                                    echo " No requirements.txt found."
-                                fi
-                                pip install pytest pytest-cov pip-audit checkov awscli
-                            '''
+           stage('🐍 Setup Python Environment') {
+    steps {
+        dir("${WORKSPACE}/${SERVICE_NAME}") {
+            script {
+                sh """
+                    #!/bin/bash
+                    set -e
+                    echo "📦 Creating virtual environment..."
+                    ${PYTHON_BIN} -m venv ${VENV_DIR}
+                    source ${VENV_DIR}/bin/activate
+                    pip install --upgrade pip
+                    if [ -f requirements.txt ]; then
+                        pip install -r requirements.txt
+                    else
+                        echo "⚠️ No requirements.txt found."
+                    fi
+                    pip install pytest pytest-cov pip-audit checkov awscli
+                """
 
-                            if (SERVICE_NAME == "aiml-testcase") {
-                                sh '''
-                                    #!/bin/bash
-                                    set -e
-                                    source ${VENV_DIR}/bin/activate
-                                    python -m spacy download en_core_web_md
-                                '''
-                            }
-                        }
-                    }
+                if (SERVICE_NAME == "aiml-testcase") {
+                    sh """
+                        #!/bin/bash
+                        set -e
+                        source ${VENV_DIR}/bin/activate
+                        python -m spacy download en_core_web_md
+                    """
                 }
             }
+        }
+    }
+}
 
             // ================================================================
             // 4️ Run Tests & Code Quality Checks
