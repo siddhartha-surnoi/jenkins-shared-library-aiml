@@ -51,48 +51,48 @@ def call(Map config = [:]) {
                 }
             }
 
-            stage('Setup Environment') {
-                steps {
-                    dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-                        sh '''#!/bin/bash
-                        set +e
-                        if [ -f setup_environment.sh ]; then
-                            chmod +x setup_environment.sh
-                            ./setup_environment.sh || true
-                        else
-                            echo "setup_environment.sh not found, skipping..."
-                        fi
-                        set -e
-                        '''
-                    }
-                }
-            }
+            // stage('Setup Environment') {
+            //     steps {
+            //         dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+            //             sh '''#!/bin/bash
+            //             set +e
+            //             if [ -f setup_environment.sh ]; then
+            //                 chmod +x setup_environment.sh
+            //                 ./setup_environment.sh || true
+            //             else
+            //                 echo "setup_environment.sh not found, skipping..."
+            //             fi
+            //             set -e
+            //             '''
+            //         }
+            //     }
+            // }
 
-            stage('Install Dependencies & Tools') {
-                steps {
-                    dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-                        sh '''#!/bin/bash
-                        set -e
-                        echo "Installing Python dependencies and security tools..."
-                        if [ ! -d "$VENV_DIR" ]; then
-                            $PYTHON_BIN -m venv $VENV_DIR
-                        fi
-                        source $VENV_DIR/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                        pip install pytest pytest-cov pip-audit awscli
+            // stage('Install Dependencies & Tools') {
+            //     steps {
+            //         dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+            //             sh '''#!/bin/bash
+            //             set -e
+            //             echo "Installing Python dependencies and security tools..."
+            //             if [ ! -d "$VENV_DIR" ]; then
+            //                 $PYTHON_BIN -m venv $VENV_DIR
+            //             fi
+            //             source $VENV_DIR/bin/activate
+            //             pip install --upgrade pip
+            //             pip install -r requirements.txt
+            //             pip install pytest pytest-cov pip-audit awscli
 
-                        echo "Installing Trivy..."
-                        if ! command -v trivy &> /dev/null; then
-                            apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
-                            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-                            echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
-                            apt-get update && apt-get install -y trivy
-                        fi
-                        '''
-                    }
-                }
-            }
+            //             echo "Installing Trivy..."
+            //             if ! command -v trivy &> /dev/null; then
+            //                 apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
+            //                 wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+            //                 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
+            //                 apt-get update && apt-get install -y trivy
+            //             fi
+            //             '''
+            //         }
+            //     }
+            // }
 
             stage('Parallel Quality & Security Checks') {
                 parallel {
@@ -111,19 +111,44 @@ def call(Map config = [:]) {
                         }
                     }
 
-                    stage('Trivy Filesystem Scan') {
-                        steps {
-                            dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-                                sh '''#!/bin/bash
-                                set -e
-                                echo "Running Trivy filesystem scan..."
-                                trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
-                                trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
-                                '''
-                            }
-                            archiveArtifacts artifacts: "${env.SERVICE_NAME}/trivy-fs-*.txt", allowEmptyArchive: true
-                        }
-                    }
+                   stage('Trivy Filesystem Scan') {
+    steps {
+        dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+            sh '''#!/bin/bash
+            set -e
+            echo "Checking if Trivy is installed..."
+
+            # Check if trivy command exists
+            if ! command -v trivy &> /dev/null; then
+                echo "Trivy not found. Installing Trivy..."
+                # Detect OS and install accordingly
+                if [ -f /etc/debian_version ]; then
+                    sudo apt-get update -y
+                    sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+                    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                    echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
+                    sudo apt-get update -y
+                    sudo apt-get install -y trivy
+                elif [ -f /etc/redhat-release ]; then
+                    sudo rpm --import https://aquasecurity.github.io/trivy-repo/rpm/public.key
+                    sudo curl -sfL https://aquasecurity.github.io/trivy-repo/rpm/trivy.repo -o /etc/yum.repos.d/trivy.repo
+                    sudo yum install -y trivy
+                else
+                    echo "Unsupported OS. Please install Trivy manually."
+                    exit 1
+                fi
+            else
+                echo "Trivy is already installed."
+            fi
+
+            echo "Running Trivy filesystem scan..."
+            trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
+            trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
+            '''
+        }
+    }
+}
+
 
                     stage('Python Dependency Audit') {
                         steps {
