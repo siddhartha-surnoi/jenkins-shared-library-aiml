@@ -194,7 +194,7 @@ def call(Map config = [:]) {
                             if (qg.status != 'OK') {
                                 error "SonarQube Quality Gate failed: ${qg.status}"
                             } else {
-                                echo "SonarQube Quality Gate passed successfully ✅"
+                                echo "SonarQube Quality Gate passed successfully "
                             }
                         }
                     }
