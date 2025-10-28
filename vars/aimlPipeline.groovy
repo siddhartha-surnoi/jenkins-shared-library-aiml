@@ -1,3 +1,54 @@
+/*
+================================================================================
+ PROJECT INFORMATION
+================================================================================
+Project Name    : FusionIQ
+Maintained By   : DevOps Team @ Surnoi Technology Pvt Ltd
+Developed By    : AI/ML Development Team mainted by DevOps Team
+Pipeline Owner  : Kanaparthi Siddhartha (DevOps Engineer)
+Pipeline Type   : Shared Jenkins Library for Multi-Microservice Build & Deploy
+
+================================================================================
+ SUPPORTED MICROSERVICES
+================================================================================
+SERVICE_NAME      | GitHub Repo                         | Entrypoint File       | Docker Image | Default Port
+------------------ | ------------------------------------ | --------------------- | ------------- | --------------
+api-gateway        | API-Gateway-AIML-Microservice        | gateway.py            | api-gateway   | 8000
+aiml-testcase      | AIML-testcase                       | Integration.py        | aiml-testcase | 8100
+jobtestcase        | jobtestcase                         | integration.py        | jobtestcase   | 8200
+feed-aiml          | Feed-AIML-Microservice               | app_main.py           | feed-aiml     | 8300
+
+================================================================================
+ DESCRIPTION
+================================================================================
+This Jenkinsfile automates the build, test, and Docker packaging process for
+multiple AIML microservices. It provides:
+  - Dynamic selection of microservice name (SERVICE_NAME)
+  - Dynamic Entrypoint & Port selection for new services
+  - Version tagging from pyproject.toml
+  - Optional local service run for validation
+  - Reusable structure for adding new microservices quickly
+
+To add a new microservice:
+  1️ Add its entry in the "SUPPORTED MICROSERVICES" section.
+  2️ Define its repo URL, entrypoint, Docker image name, and port.
+  3️ Set SERVICE_NAME when triggering the Jenkins pipeline.
+
+================================================================================
+ EXAMPLE USAGE
+================================================================================
+When triggering the pipeline:
+  - SERVICE_NAME = "feed-aiml"
+  - PORT = "8001"
+  -  DOCKER_IMAGE_NAME: 'feed-aiml',
+  - ENTRYPOINT = "app_main.py"
+  - VERSION = extracted automatically from pyproject.toml
+
+================================================================================
+*/
+
+
+
 def call(Map config = [:]) {
 
     pipeline {
