@@ -13,197 +13,210 @@ Purpose          : Shared reusable CI/CD pipeline for all AIML microservices
 
 def call(Map config = [:]) {
 
-    // ================================================================
-    // DYNAMIC CONFIGURATION VALUES
-    // ================================================================
-    def REPO                  = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
-    def SERVICE_NAME          = config.SERVICE_NAME ?: "api-gateway"
-    def PYTHON_VERSION        = config.PYTHON_VERSION ?: "3.11"
-    def PYTHON_BIN            = config.PYTHON_BIN ?: "/usr/bin/python3.11"
-    def GIT_CREDENTIALS       = config.GIT_CREDENTIALS ?: "git-access"
-    def SONARQUBE_ENV         = config.SONARQUBE_ENV ?: "SonarQube-Server"
-    def DOCKER_IMAGE_NAME     = config.DOCKER_IMAGE_NAME ?: SERVICE_NAME
-    def DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
-    def PORT                  = config.PORT ?: getDefaultPort(SERVICE_NAME)
-    def ENTRYPOINT            = config.ENTRYPOINT ?: getDefaultEntrypoint(SERVICE_NAME)
-
     pipeline {
         agent any
 
         environment {
-            REPO = "${REPO}"
-            SERVICE_NAME = "${SERVICE_NAME}"
-            PYTHON_VERSION = "${PYTHON_VERSION}"
-            PYTHON_BIN = "${PYTHON_BIN}"
-            GIT_CREDENTIALS = "${GIT_CREDENTIALS}"
-            SONARQUBE_ENV = "${SONARQUBE_ENV}"
-            DOCKER_IMAGE_NAME = "${DOCKER_IMAGE_NAME}"
-            DOCKERHUB_CREDENTIALS = "${DOCKERHUB_CREDENTIALS}"
-            PORT = "${PORT}"
-            ENTRYPOINT = "${ENTRYPOINT}"
+            REPO                  = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
+            SERVICE_NAME          = config.SERVICE_NAME ?: "api-gateway"
+            PYTHON_VERSION        = config.PYTHON_VERSION ?: "3.11"
+            PYTHON_BIN            = config.PYTHON_BIN ?: "/usr/bin/python3.11"
+            GIT_CREDENTIALS       = config.GIT_CREDENTIALS ?: "git-access"
+            VENV_DIR              = config.VENV_DIR ?: "${WORKSPACE}/myenv"
+            SONARQUBE_ENV         = config.SONARQUBE_ENV ?: "SonarQube-Server"
+            DOCKER_IMAGE_NAME     = config.DOCKER_IMAGE_NAME ?: SERVICE_NAME
+            DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
+            PORT                  = config.PORT ?: getDefaultPort(SERVICE_NAME)
         }
 
         stages {
 
-            // ================================================================
-            // 1. Clone Repository
-            // ================================================================
-            stage('Clone Repository') {
+            stage('Checkout Repository') {
                 steps {
-                    script {
-                        echo "Cloning branch 'main' (fallback to 'master' if unavailable)..."
-                        try {
-                            git branch: 'main', url: "${REPO}", credentialsId: "${GIT_CREDENTIALS}"
-                        } catch (Exception e) {
-                            echo "main branch not found, trying master..."
-                            git branch: 'master', url: "${REPO}", credentialsId: "${GIT_CREDENTIALS}"
-                        }
+                    dir("${WORKSPACE}/${SERVICE_NAME}") {
+                        git branch: 'master', credentialsId: "${env.GIT_CREDENTIALS}", url: "${env.REPO}"
                     }
                 }
             }
 
-            // ================================================================
-            // 2–4. Parallel Environment Setup and Tests
-            // ================================================================
-            stage('Setup & Test in Parallel') {
-                failFast true
+            stage('Setup Environment') {
+                steps {
+                    dir("${WORKSPACE}/${SERVICE_NAME}") {
+                        sh '''#!/bin/bash
+                        set +e
+                        if [ -f setup_environment.sh ]; then
+                            chmod +x setup_environment.sh
+                            ./setup_environment.sh || true
+                        else
+                            echo "setup_environment.sh not found, skipping..."
+                        fi
+                        set -e
+                        '''
+                    }
+                }
+            }
+
+            stage('Install Dependencies & Tools') {
+                steps {
+                    dir("${WORKSPACE}/${SERVICE_NAME}") {
+                        sh '''#!/bin/bash
+                        set -e
+                        echo "Installing Python dependencies and security tools..."
+                        if [ ! -d "$VENV_DIR" ]; then
+                            $PYTHON_BIN -m venv $VENV_DIR
+                        fi
+                        source $VENV_DIR/bin/activate
+                        pip install --upgrade pip
+                        pip install -r requirements.txt
+                        pip install pytest pytest-cov pip-audit awscli
+                        
+                        echo "Installing Trivy..."
+                        if ! command -v trivy &> /dev/null; then
+                            apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
+                            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+                            echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
+                            apt-get update && apt-get install -y trivy
+                        fi
+                        '''
+                    }
+                }
+            }
+
+            stage('Parallel Quality & Security Checks') {
                 parallel {
 
-                    stage('Setup Environment') {
+                    stage('Run Unit Tests & Coverage') {
                         steps {
                             dir("${WORKSPACE}/${SERVICE_NAME}") {
-                                script {
-                                    if (fileExists('setup_environment.sh')) {
-                                        sh '''
-                                            #!/usr/bin/env bash
-                                            set -e
-                                            chmod +x setup_environment.sh
-                                            ./setup_environment.sh
-                                        '''
-                                    } else {
-                                        echo "setup_environment.sh not found — skipping system setup."
-                                    }
-                                }
+                                sh '''#!/bin/bash
+                                set -e
+                                source $VENV_DIR/bin/activate
+                                echo "Running tests with coverage..."
+                                pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term || true
+                                '''
                             }
+                            archiveArtifacts artifacts: "${SERVICE_NAME}/coverage.xml", allowEmptyArchive: true
                         }
                     }
 
-                    stage('Setup Python Environment') {
+                    stage('Trivy Filesystem Scan') {
                         steps {
                             dir("${WORKSPACE}/${SERVICE_NAME}") {
-                                script {
-                                    def VENV_DIR = "${env.WORKSPACE}/${SERVICE_NAME}/myenv"
-                                    sh """
-                                        #!/usr/bin/env bash
-                                        set -e
-                                        echo "Creating Python virtual environment..."
-                                        ${PYTHON_BIN} -m venv ${VENV_DIR}
-                                        . ${VENV_DIR}/bin/activate
-                                        pip install --upgrade pip
-                                        if [ -f requirements.txt ]; then
-                                            pip install -r requirements.txt
-                                        else
-                                            echo "No requirements.txt found."
-                                        fi
-                                        pip install pytest pytest-cov pip-audit checkov awscli
-                                    """
-
-                                    if (SERVICE_NAME == "aiml-testcase") {
-                                        sh """
-                                            #!/usr/bin/env bash
-                                            set -e
-                                            . ${VENV_DIR}/bin/activate
-                                            python -m spacy download en_core_web_md
-                                        """
-                                    }
-                                }
+                                sh '''#!/bin/bash
+                                set -e
+                                echo "Running Trivy filesystem scan..."
+                                trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
+                                trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
+                                '''
                             }
+                            archiveArtifacts artifacts: "${SERVICE_NAME}/trivy-fs-*.txt", allowEmptyArchive: true
                         }
                     }
 
-                    stage('Run Tests & Code Quality') {
+                    stage('Python Dependency Audit') {
+                        steps {
+                            dir("${WORKSPACE}/${SERVICE_NAME}") {
+                                sh '''#!/bin/bash
+                                set -e
+                                source $VENV_DIR/bin/activate
+                                echo "Auditing Python dependencies..."
+                                pip-audit -r requirements.txt -f json > pip-audit.json || true
+                                '''
+                            }
+                            archiveArtifacts artifacts: "${SERVICE_NAME}/pip-audit.json", allowEmptyArchive: true
+                        }
+                    }
+
+                    stage('Docker Build & Scan') {
                         steps {
                             dir("${WORKSPACE}/${SERVICE_NAME}") {
                                 script {
-                                    def VENV_DIR = "${env.WORKSPACE}/${SERVICE_NAME}/myenv"
-                                    sh """
-                                        #!/usr/bin/env bash
-                                        set -e
-                                        if [ -d "${VENV_DIR}" ]; then
-                                            . ${VENV_DIR}/bin/activate
-                                        fi
-                                        pytest --maxfail=1 --disable-warnings -q || true
-                                        pip-audit || true
-                                        checkov -d . || true
-                                    """
+                                    sh '''#!/bin/bash
+                                    set -e
+                                    VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
+                                    echo "Building Docker image: ${DOCKER_IMAGE_NAME}:$VERSION"
+                                    docker build -t ${DOCKER_IMAGE_NAME}:$VERSION .
+                                    echo "Scanning Docker image..."
+                                    trivy image --exit-code 0 --severity HIGH,CRITICAL ${DOCKER_IMAGE_NAME}:$VERSION | tee trivy-image-scan.txt || true
+                                    trivy image --format json -o trivy-image-report.json ${DOCKER_IMAGE_NAME}:$VERSION || true
+                                    '''
                                 }
                             }
+                            archiveArtifacts artifacts: "${SERVICE_NAME}/trivy-image-*", allowEmptyArchive: true
                         }
                     }
                 }
             }
 
-            // ================================================================
-            // 5. Build Docker Image
-            // ================================================================
-            stage('Build Docker Image') {
-                steps {
-                    script {
-                        def version = getVersionFromPyProject() ?: "latest"
-                        sh """
-                            #!/usr/bin/env bash
-                            set -e
-                            echo "Building Docker image: ${DOCKER_IMAGE_NAME}:${version}"
-                            docker build -t ${DOCKER_IMAGE_NAME}:${version} -f ${WORKSPACE}/Dockerfile ${WORKSPACE}
-                            docker tag ${DOCKER_IMAGE_NAME}:${version} ${DOCKER_IMAGE_NAME}:latest
-                        """
-                    }
-                }
-            }
-
-            // ================================================================
-            // 6. Push Docker Image to GitHub Packages
-            // ================================================================
-            stage('Push Docker Image to GitHub Packages') {
-                steps {
-                    withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDENTIALS}", usernameVariable: 'USERNAME', passwordVariable: 'TOKEN')]) {
-                        sh """
-                            #!/usr/bin/env bash
-                            set -e
-                            echo "Logging into GitHub Container Registry..."
-                            echo \$TOKEN | docker login ghcr.io -u \$USERNAME --password-stdin
-
-                            IMAGE_NAME="ghcr.io/\$USERNAME/${DOCKER_IMAGE_NAME}"
-                            VERSION=\$(python3 -c "import tomllib; print(tomllib.load(open('${WORKSPACE}/pyproject.toml','rb'))['project']['version'])" 2>/dev/null || echo latest)
-
-                            echo "Pushing image \$IMAGE_NAME:\$VERSION"
-                            docker tag ${DOCKER_IMAGE_NAME}:\$VERSION \$IMAGE_NAME:\$VERSION
-                            docker push \$IMAGE_NAME:\$VERSION
-
-                            echo "Pushing image \$IMAGE_NAME:latest"
-                            docker tag ${DOCKER_IMAGE_NAME}:\$VERSION \$IMAGE_NAME:latest
-                            docker push \$IMAGE_NAME:latest
-                        """
-                    }
-                }
-            }
-
-            // ================================================================
-            // 7. Run Microservice Locally (Optional)
-            // ================================================================
-            stage('Run Microservice Locally (Optional)') {
-                when {
-                    expression { return config.RUN_LOCAL ?: false }
+            stage('SonarQube Analysis') {
+                environment {
+                    scannerHome = tool 'sonar-7.2'
                 }
                 steps {
                     dir("${WORKSPACE}/${SERVICE_NAME}") {
-                        sh """
-                            #!/usr/bin/env bash
+                        script {
+                            withSonarQubeEnv("${env.SONARQUBE_ENV}") {
+                                withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
+                                    sh '''#!/bin/bash
+                                    set -e
+                                    echo "Starting SonarQube scan..."
+                                    if [ ! -f sonar-project.properties ]; then
+                                        echo "sonar-project.properties not found!"
+                                        exit 1
+                                    fi
+                                    if ! grep -q "sonar.python.coverage.reportPaths" sonar-project.properties; then
+                                        echo "sonar.python.coverage.reportPaths=coverage.xml" >> sonar-project.properties
+                                    fi
+                                    $scannerHome/bin/sonar-scanner \
+                                        -Dsonar.host.url=$SONAR_HOST_URL \
+                                        -Dsonar.login=$SONAR_TOKEN
+                                    '''
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            stage('Quality Gate Check') {
+                steps {
+                    script {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def qg = waitForQualityGate()
+                            if (qg.status != 'OK') {
+                                error "SonarQube Quality Gate failed: ${qg.status}"
+                            } else {
+                                echo "SonarQube Quality Gate passed: ${qg.status}"
+                            }
+                        }
+                    }
+                }
+            }
+
+            stage('Push & Run Docker Image') {
+                steps {
+                    withCredentials([usernamePassword(credentialsId: "${env.DOCKERHUB_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        dir("${WORKSPACE}/${SERVICE_NAME}") {
+                            sh '''#!/bin/bash
                             set -e
-                            echo "Starting ${SERVICE_NAME} on port ${PORT}..."
-                            nohup ${PYTHON_BIN} ${ENTRYPOINT} > ${SERVICE_NAME}.log 2>&1 &
-                            echo "${SERVICE_NAME} started — logs: ${SERVICE_NAME}.log"
-                        """
+                            VERSION=$(grep -Po '(?<=version = ")[^"]*' pyproject.toml || echo "latest")
+                            echo "Logging into DockerHub..."
+                            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+                            docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
+                            docker tag ${DOCKER_IMAGE_NAME}:$VERSION $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
+                            docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:$VERSION
+                            docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
+                            docker logout
+
+                            echo "Running container..."
+                            CONTAINER="${SERVICE_NAME}-$VERSION"
+                            if docker ps -a | grep -q $CONTAINER; then
+                                docker rm -f $CONTAINER
+                            fi
+                            docker run -d --name $CONTAINER -p ${PORT}:${PORT} ${DOCKER_IMAGE_NAME}:$VERSION
+                            docker ps -a
+                            '''
+                        }
                     }
                 }
             }
@@ -211,45 +224,20 @@ def call(Map config = [:]) {
 
         post {
             always {
-                echo "Pipeline completed for ${SERVICE_NAME}"
-            }
-            failure {
-                echo "Pipeline failed for ${SERVICE_NAME}"
+                echo "Cleaning workspace..."
+                cleanWs()
             }
         }
     }
 }
 
-// =============================================================
-//  Helper Functions
-// =============================================================
-def getVersionFromPyProject() {
-    try {
-        return sh(script: "python3 -c \"import tomllib; print(tomllib.load(open('${WORKSPACE}/pyproject.toml','rb'))['project']['version'])\"", returnStdout: true).trim()
-    } catch (err) {
-        echo "Unable to read version from pyproject.toml, defaulting to 'latest'"
-        return "latest"
+def getDefaultPort(serviceName) {
+    switch(serviceName) {
+        case "api-gateway":   return "8000"
+        case "aiml-testcase": return "8001"
+        case "jobtestcase":   return "8002"
+        case "feed-aiml":     return "8003"
+        default:
+            return input(message: "Enter port number for new service:", parameters: [string(defaultValue: "8000", description: 'Custom service port')])
     }
-}
-
-def getDefaultEntrypoint(service) {
-    def entrypoints = [
-        "api-gateway"           : "gateway.py",
-        "aiml-testcase"         : "Integration.py",
-        "jobtestcase"           : "integration.py",
-        "feed-aiml"             : "app_main.py",
-        
-    ]
-    return entrypoints.get(service, "app_main.py")
-}
-
-def getDefaultPort(service) {
-    def ports = [
-        "api-gateway"           : "8000",
-        "aiml-testcase"         : "8001",
-        "jobtestcase"           : "8002",
-        "feed-aiml"             : "8003",
-        
-    ]
-    return ports.get(service, "8000")
 }
