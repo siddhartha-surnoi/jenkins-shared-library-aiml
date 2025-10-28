@@ -15,7 +15,7 @@ Purpose          : Shared reusable CI/CD pipeline for all AIML microservices
 ✔ Automatic Python environment setup (venv)
 ✔ Quality checks (pytest, coverage, pip-audit, Checkov)
 ✔ SonarQube integration with quality gate enforcement
-✔ Trivy scanning (filesystem + Docker image)
+✔ Trivy Docker image scanning
 ✔ Docker build & push to GitHub Packages
 ✔ Optional local microservice run
 ✔ Auto-detects 'main' or 'master' branch
@@ -121,11 +121,17 @@ def call(Map config = [:]) {
                         }
                     }
 
-                    stage(' Filesystem Vulnerability Scan (Trivy)') {
+                    stage(' Trivy Docker Image Scan') {
                         steps {
-                            sh '''#!/bin/bash
-                                trivy fs --exit-code 0 --no-progress . > trivy-fs.txt
-                            '''
+                            script {
+                                def version = getVersionFromPyProject() ?: "latest"
+                                sh '''#!/bin/bash
+                                    echo "🔍 Running Trivy scan for Docker image: ${DOCKER_IMAGE_NAME}:${version}"
+                                    docker build -t ${DOCKER_IMAGE_NAME}:${version} .
+                                    trivy image --exit-code 0 --no-progress ${DOCKER_IMAGE_NAME}:${version} > trivy-docker.txt || true
+                                    echo " Trivy scan completed — report saved to trivy-docker.txt"
+                                '''
+                            }
                         }
                     }
                 }
