@@ -4,22 +4,24 @@ def call(Map config = [:]) {
         agent any
 
         environment {
-            REPO                 = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
-            SERVICE_NAME         = config.SERVICE_NAME ?: "api-gateway"
-            PYTHON_VERSION       = config.PYTHON_VERSION ?: "3.11"
-            PYTHON_BIN           = config.PYTHON_BIN ?: "/usr/bin/python3.11"
-            GIT_CREDENTIALS      = config.GIT_CREDENTIALS ?: "git-access"
-            VENV_DIR             = config.VENV_DIR ?: "${WORKSPACE}/myenv"
-            SONARQUBE_ENV        = config.SONARQUBE_ENV ?: "SonarQube-Server"
-            DOCKER_IMAGE_NAME    = config.DOCKER_IMAGE_NAME ?: SERVICE_NAME
+            REPO                  = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
+            SERVICE_NAME          = config.SERVICE_NAME ?: "api-gateway"
+            PYTHON_VERSION        = config.PYTHON_VERSION ?: "3.11"
+            PYTHON_BIN            = config.PYTHON_BIN ?: "/usr/bin/python3.11"
+            GIT_CREDENTIALS       = config.GIT_CREDENTIALS ?: "git-access"
+            VENV_DIR              = config.VENV_DIR ?: "${WORKSPACE}/myenv"
+            SONARQUBE_ENV         = config.SONARQUBE_ENV ?: "SonarQube-Server"
+            DOCKER_IMAGE_NAME     = config.DOCKER_IMAGE_NAME ?: SERVICE_NAME
             DOCKERHUB_CREDENTIALS = config.DOCKERHUB_CREDENTIALS ?: "dockerhub-credentials"
-            PORT                 = config.PORT ?: getDefaultPort(SERVICE_NAME)
+            PORT                  = config.PORT ?: getDefaultPort(SERVICE_NAME)
+            ENTRYPOINT            = config.ENTRYPOINT ?: getDefaultEntrypoint(SERVICE_NAME)
         }
 
         stages {
 
             stage('Checkout Repository') {
                 steps {
+                    echo " Cloning repository: ${REPO}"
                     dir("${WORKSPACE}/${SERVICE_NAME}") {
                         git branch: 'master', credentialsId: "${env.GIT_CREDENTIALS}", url: "${env.REPO}"
                     }
@@ -71,6 +73,24 @@ def call(Map config = [:]) {
                 }
             }
 
+            stage('Run Microservice Locally (Optional)') {
+                when {
+                    expression { return params.RUN_LOCALLY == true }
+                }
+                steps {
+                    dir("${WORKSPACE}/${SERVICE_NAME}") {
+                        sh """#!/bin/bash
+                        set -e
+                        echo " Running ${SERVICE_NAME} locally on port ${PORT}"
+                        source ${VENV_DIR}/bin/activate
+                        nohup ${PYTHON_BIN} ${ENTRYPOINT} --port ${PORT} > ${SERVICE_NAME}.log 2>&1 &
+                        sleep 5
+                        echo " ${SERVICE_NAME} started on port ${PORT}"
+                        """
+                    }
+                }
+            }
+
             stage('Parallel Quality & Security Checks') {
                 parallel {
 
@@ -80,7 +100,6 @@ def call(Map config = [:]) {
                                 sh '''#!/bin/bash
                                 set -e
                                 source $VENV_DIR/bin/activate
-                                echo " Running tests with coverage..."
                                 pytest --cov=. --cov-report=xml:coverage.xml --cov-report=term || true
                                 '''
                             }
@@ -93,7 +112,6 @@ def call(Map config = [:]) {
                             dir("${WORKSPACE}/${SERVICE_NAME}") {
                                 sh '''#!/bin/bash
                                 set -e
-                                echo " Running Trivy filesystem scan..."
                                 trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
                                 trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
                                 '''
@@ -108,7 +126,6 @@ def call(Map config = [:]) {
                                 sh '''#!/bin/bash
                                 set -e
                                 source $VENV_DIR/bin/activate
-                                echo " Auditing Python dependencies..."
                                 pip-audit -r requirements.txt -f json > pip-audit.json || true
                                 '''
                             }
@@ -148,7 +165,7 @@ def call(Map config = [:]) {
                                 withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                                     sh '''#!/bin/bash
                                     set -e
-                                    echo " Starting SonarQube scan..."
+                                    echo " Running SonarQube analysis..."
                                     if [ ! -f sonar-project.properties ]; then
                                         echo " sonar-project.properties not found!"
                                         exit 1
@@ -197,7 +214,7 @@ def call(Map config = [:]) {
                             docker push $DOCKER_USER/${DOCKER_IMAGE_NAME}:latest
                             docker logout
 
-                            echo " Running container..."
+                            echo " Running container on port ${PORT}..."
                             CONTAINER="${SERVICE_NAME}-$VERSION"
                             if docker ps -a | grep -q $CONTAINER; then
                                 docker rm -f $CONTAINER
@@ -214,7 +231,7 @@ def call(Map config = [:]) {
         post {
             always {
                 echo " Cleaning workspace..."
-                cleanWs()
+               // cleanWs()
             }
         }
     }
@@ -229,5 +246,17 @@ def getDefaultPort(serviceName) {
         case "feed-aiml":     return "8003"
         default:
             return input(message: "Enter port number for new service:", parameters: [string(defaultValue: "8000", description: 'Custom service port')])
+    }
+}
+
+// Default entrypoint mapping for known services
+def getDefaultEntrypoint(serviceName) {
+    switch(serviceName) {
+        case "api-gateway":   return "gateway.py"
+        case "aiml-testcase": return "Integration.py"
+        case "jobtestcase":   return "integration.py"
+        case "feed-aiml":     return "app_main.py"
+        default:
+            return input(message: "Enter entrypoint file for new service:", parameters: [string(defaultValue: "main.py", description: 'Entrypoint Python file')])
     }
 }
