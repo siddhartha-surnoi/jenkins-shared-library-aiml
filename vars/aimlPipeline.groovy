@@ -18,6 +18,7 @@ Purpose          : Shared reusable CI/CD pipeline for all AIML microservices
 ✔ Trivy scanning (filesystem + Docker image)
 ✔ Docker build & push to GitHub Packages
 ✔ Optional local microservice run
+✔ Auto-detects 'main' or 'master' branch
 ================================================================================
 */
 
@@ -28,6 +29,7 @@ def call(Map config = [:]) {
     // ================================================================
     def REPO                  = config.REPO ?: "https://github.com/SurnoiTechnology/API-Gateway-AIML-Microservice.git"
     def SERVICE_NAME          = config.SERVICE_NAME ?: "api-gateway"
+    def BRANCH                = config.BRANCH ?: detectBranch(REPO)
     def PYTHON_VERSION        = config.PYTHON_VERSION ?: "3.11"
     def PYTHON_BIN            = config.PYTHON_BIN ?: "/usr/bin/python3.11"
     def GIT_CREDENTIALS       = config.GIT_CREDENTIALS ?: "git-access"
@@ -44,6 +46,7 @@ def call(Map config = [:]) {
         environment {
             REPO = "${REPO}"
             SERVICE_NAME = "${SERVICE_NAME}"
+            BRANCH = "${BRANCH}"
             PYTHON_VERSION = "${PYTHON_VERSION}"
             PYTHON_BIN = "${PYTHON_BIN}"
             GIT_CREDENTIALS = "${GIT_CREDENTIALS}"
@@ -60,8 +63,8 @@ def call(Map config = [:]) {
             // ================================================================
             stage(' Clone Repository') {
                 steps {
-                    echo "Cloning repository: ${REPO}"
-                    git branch: 'main', url: "${REPO}", credentialsId: "${GIT_CREDENTIALS}"
+                    echo "Cloning branch '${BRANCH}' from repository: ${REPO}"
+                    git branch: "${BRANCH}", url: "${REPO}", credentialsId: "${GIT_CREDENTIALS}"
                 }
             }
 
@@ -220,27 +223,26 @@ def call(Map config = [:]) {
         post {
             always {
                 echo " Cleaning up temporary files..."
-                // cleanWs()
             }
             success {
-                echo " Pipeline successfully completed for ${SERVICE_NAME}"
+                echo "  Pipeline successfully completed for ${SERVICE_NAME}"
             }
             failure {
-                echo " Pipeline failed for ${SERVICE_NAME}"
+                echo "  Pipeline failed for ${SERVICE_NAME}"
             }
         }
     }
 }
 
 // =============================================================
-// 🔧 Helper Functions
+//  Helper Functions
 // =============================================================
 
 def getVersionFromPyProject() {
     try {
         return sh(script: "python3 -c \"import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])\"", returnStdout: true).trim()
     } catch (err) {
-        echo "⚠️ Unable to read version from pyproject.toml, defaulting to 'latest'"
+        echo " Unable to read version from pyproject.toml, defaulting to 'latest'"
         return "latest"
     }
 }
@@ -263,4 +265,14 @@ def getDefaultPort(service) {
         "feed-aiml"     : "8300"
     ]
     return ports.get(service, "8000")
+}
+
+def detectBranch(repoUrl) {
+    try {
+        def result = sh(script: "git ls-remote --heads ${repoUrl} | grep -E 'refs/heads/(main|master)' | awk -F/ '{print \$3}' | head -n1", returnStdout: true).trim()
+        return result ?: "main"
+    } catch (err) {
+        echo " Unable to detect branch automatically. Defaulting to 'main'"
+        return "main"
+    }
 }
