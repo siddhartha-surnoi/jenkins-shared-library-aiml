@@ -90,30 +90,32 @@ def call(Map config = [:]) {
             // ================================================================
             // 3️ Python Virtual Environment Setup
             // ================================================================
-           stage('🐍 Setup Python Environment') {
+       stage(' Setup Python Environment') {
     steps {
         dir("${WORKSPACE}/${SERVICE_NAME}") {
             script {
+                def VENV_DIR = "${env.WORKSPACE}/${SERVICE_NAME}/myenv"  // fix null issue
+
                 sh """
-                    #!/bin/bash
+                    #!/usr/bin/env bash
                     set -e
-                    echo "📦 Creating virtual environment..."
+                    echo " Creating virtual environment..."
                     ${PYTHON_BIN} -m venv ${VENV_DIR}
-                    source ${VENV_DIR}/bin/activate
+                    . ${VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     if [ -f requirements.txt ]; then
                         pip install -r requirements.txt
                     else
-                        echo "⚠️ No requirements.txt found."
+                        echo " No requirements.txt found."
                     fi
                     pip install pytest pytest-cov pip-audit checkov awscli
                 """
 
                 if (SERVICE_NAME == "aiml-testcase") {
                     sh """
-                        #!/bin/bash
+                        #!/usr/bin/env bash
                         set -e
-                        source ${VENV_DIR}/bin/activate
+                        . ${VENV_DIR}/bin/activate
                         python -m spacy download en_core_web_md
                     """
                 }
