@@ -72,7 +72,7 @@ def call(Map config = [:]) {
                 steps {
                     dir("${WORKSPACE}/${env.SERVICE_NAME}") {
                         script {
-                            // 🔹 General setup
+                            //  General setup
                             sh '''#!/bin/bash
                             set -e
                             echo "Installing Python dependencies and security tools..."
@@ -85,7 +85,7 @@ def call(Map config = [:]) {
                             pip install pytest pytest-cov pip-audit awscli
                             '''
 
-                            // 🔹 Special setup for AIML Testcase
+                            //  Special setup for AIML Testcase
                             if (env.SERVICE_NAME == "aiml-testcase") {
                                 sh '''#!/bin/bash
                                 set -e
@@ -100,7 +100,7 @@ def call(Map config = [:]) {
                                 '''
                             }
 
-                            // 🔹 Trivy installation (universal)
+                            //  Trivy installation (universal)
                             sh '''#!/bin/bash
                             echo "Ensuring Trivy is installed..."
                             if ! command -v trivy &> /dev/null; then
@@ -255,7 +255,7 @@ def call(Map config = [:]) {
         post {
             always {
                 echo "Cleaning up workspace..."
-                cleanWs()
+                // cleanWs()
             }
         }
     }
