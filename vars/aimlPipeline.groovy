@@ -72,6 +72,7 @@ def call(Map config = [:]) {
                 steps {
                     dir("${WORKSPACE}/${env.SERVICE_NAME}") {
                         script {
+                            // 🔹 General setup
                             sh '''#!/bin/bash
                             set -e
                             echo "Installing Python dependencies and security tools..."
@@ -84,24 +85,31 @@ def call(Map config = [:]) {
                             pip install pytest pytest-cov pip-audit awscli
                             '''
 
-                            //  Additional logic only for aiml-testcase
+                            // 🔹 Special setup for AIML Testcase
                             if (env.SERVICE_NAME == "aiml-testcase") {
                                 sh '''#!/bin/bash
                                 set -e
                                 source $VENV_DIR/bin/activate
-                                echo "Installing Spacy model for AIML Testcase..."
-                                python -m spacy download en_core_web_md
+                                echo "Running special dependency setup for AIML Testcase..."
+                                echo "Reinstalling dependencies..."
+                                pip install -r requirements.txt
+                                echo "Checking if spaCy model is already installed..."
+                                python -m spacy validate | grep -q "en_core_web_md" || python -m spacy download en_core_web_md
+                                echo "Installing testing and security tools..."
+                                pip install pytest pytest-cov pip-audit awscli
                                 '''
                             }
 
-                            //  Install Trivy (shared for all)
+                            // 🔹 Trivy installation (universal)
                             sh '''#!/bin/bash
-                            echo "Installing Trivy if not already present..."
+                            echo "Ensuring Trivy is installed..."
                             if ! command -v trivy &> /dev/null; then
                                 apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
                                 wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
                                 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
                                 apt-get update && apt-get install -y trivy
+                            else
+                                echo "Trivy already installed — skipping installation."
                             fi
                             '''
                         }
