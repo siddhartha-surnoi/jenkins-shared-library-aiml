@@ -71,25 +71,40 @@ def call(Map config = [:]) {
             stage('Install Dependencies & Tools') {
                 steps {
                     dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-                        sh '''#!/bin/bash
-                        set -e
-                        echo "Installing Python dependencies and security tools..."
-                        if [ ! -d "$VENV_DIR" ]; then
-                            $PYTHON_BIN -m venv $VENV_DIR
-                        fi
-                        source $VENV_DIR/bin/activate
-                        pip install --upgrade pip
-                        pip install -r requirements.txt
-                        pip install pytest pytest-cov pip-audit awscli
+                        script {
+                            sh '''#!/bin/bash
+                            set -e
+                            echo "Installing Python dependencies and security tools..."
+                            if [ ! -d "$VENV_DIR" ]; then
+                                $PYTHON_BIN -m venv $VENV_DIR
+                            fi
+                            source $VENV_DIR/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                            pip install pytest pytest-cov pip-audit awscli
+                            '''
 
-                        echo "Installing Trivy..."
-                        if ! command -v trivy &> /dev/null; then
-                            apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
-                            wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-                            echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
-                            apt-get update && apt-get install -y trivy
-                        fi
-                        '''
+                            //  Additional logic only for aiml-testcase
+                            if (env.SERVICE_NAME == "aiml-testcase") {
+                                sh '''#!/bin/bash
+                                set -e
+                                source $VENV_DIR/bin/activate
+                                echo "Installing Spacy model for AIML Testcase..."
+                                python -m spacy download en_core_web_md
+                                '''
+                            }
+
+                            //  Install Trivy (shared for all)
+                            sh '''#!/bin/bash
+                            echo "Installing Trivy if not already present..."
+                            if ! command -v trivy &> /dev/null; then
+                                apt-get update && apt-get install -y wget apt-transport-https gnupg lsb-release
+                                wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+                                echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/trivy.list
+                                apt-get update && apt-get install -y trivy
+                            fi
+                            '''
+                        }
                     }
                 }
             }
@@ -111,44 +126,18 @@ def call(Map config = [:]) {
                         }
                     }
 
-                   stage('Trivy Filesystem Scan') {
-    steps {
-        dir("${WORKSPACE}/${env.SERVICE_NAME}") {
-            sh '''#!/bin/bash
-            set -e
-            echo "Checking if Trivy is installed..."
-
-            # Check if trivy command exists
-            if ! command -v trivy &> /dev/null; then
-                echo "Trivy not found. Installing Trivy..."
-                # Detect OS and install accordingly
-                if [ -f /etc/debian_version ]; then
-                    sudo apt-get update -y
-                    sudo apt-get install -y wget apt-transport-https gnupg lsb-release
-                    wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
-                    echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee /etc/apt/sources.list.d/trivy.list
-                    sudo apt-get update -y
-                    sudo apt-get install -y trivy
-                elif [ -f /etc/redhat-release ]; then
-                    sudo rpm --import https://aquasecurity.github.io/trivy-repo/rpm/public.key
-                    sudo curl -sfL https://aquasecurity.github.io/trivy-repo/rpm/trivy.repo -o /etc/yum.repos.d/trivy.repo
-                    sudo yum install -y trivy
-                else
-                    echo "Unsupported OS. Please install Trivy manually."
-                    exit 1
-                fi
-            else
-                echo "Trivy is already installed."
-            fi
-
-            echo "Running Trivy filesystem scan..."
-            trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
-            trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
-            '''
-        }
-    }
-}
-
+                    stage('Trivy Filesystem Scan') {
+                        steps {
+                            dir("${WORKSPACE}/${env.SERVICE_NAME}") {
+                                sh '''#!/bin/bash
+                                set -e
+                                echo "Running Trivy filesystem scan..."
+                                trivy fs --exit-code 0 --no-progress . | tee trivy-fs-report.txt || true
+                                trivy fs --exit-code 1 --severity CRITICAL,HIGH --no-progress . | tee trivy-fs-critical.txt || true
+                                '''
+                            }
+                        }
+                    }
 
                     stage('Python Dependency Audit') {
                         steps {
@@ -210,21 +199,6 @@ def call(Map config = [:]) {
                     }
                 }
             }
-
-            // stage('Quality Gate Check') {
-            //     steps {
-            //         script {
-            //             timeout(time: 10, unit: 'MINUTES') {
-            //                 def qg = waitForQualityGate()
-            //                 if (qg.status != 'OK') {
-            //                     error "SonarQube Quality Gate failed: ${qg.status}"
-            //                 } else {
-            //                     echo "SonarQube Quality Gate passed successfully "
-            //                 }
-            //             }
-            //         }
-            //     }
-            // }
 
             stage('Push & Run Docker Image') {
                 steps {
