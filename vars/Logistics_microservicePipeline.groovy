@@ -5,28 +5,37 @@ def call(Map config) {
 
         environment {
             GIT_COMMIT = ''
+            GIT_AUTHOR_NAME = ''
+            GIT_AUTHOR_EMAIL = ''
         }
 
         stages {
 
             // ================================================
-            // Checkout Stage with full clone and commit capture
+            // Checkout Stage with robust full clone
             // ================================================
             stage('Checkout') {
                 steps {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: env.BRANCH_NAME]],
-                        doGenerateSubmoduleConfigurations: false,
-                        extensions: [
-                            [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10]
-                        ],
-                        userRemoteConfigs: [[url: config.repo]]
-                    ])
                     script {
-                        // Capture the commit of the branch that triggered the build
+                        // Clean workspace to avoid stale refs
+                        deleteDir()
+
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: env.BRANCH_NAME]],
+                            userRemoteConfigs: [[url: config.repo]],
+                            extensions: [
+                                [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10],
+                                [$class: 'LocalBranch', localBranch: env.BRANCH_NAME]
+                            ]
+                        ])
+
+                        // Capture commit and author info
                         env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                        echo "Checked out commit: ${env.GIT_COMMIT}"
+                        env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+                        env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
+
+                        echo "Checked out commit: ${env.GIT_COMMIT} by ${env.GIT_AUTHOR_NAME} <${env.GIT_AUTHOR_EMAIL}>"
                     }
                 }
             }
@@ -47,7 +56,7 @@ def call(Map config) {
             stage('Code & Security Scans') {
                 when {
                     anyOf {
-                        expression { env.BRANCH_NAME ==~ /feature.*/ } 
+                        expression { env.BRANCH_NAME ==~ /feature.*/ }
                         expression { env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'release/dev' || env.BRANCH_NAME == 'release/qa' }
                     }
                 }
@@ -170,8 +179,8 @@ def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
         script {
             def gitCommit = env.GIT_COMMIT ?: 'N/A'
-            def gitAuthorName = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
-            def gitAuthorEmail = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
+            def gitAuthorName = env.GIT_AUTHOR_NAME ?: 'N/A'
+            def gitAuthorEmail = env.GIT_AUTHOR_EMAIL ?: 'N/A'
 
             office365ConnectorSend(
                 message: "*Build ${status}* for branch `${env.BRANCH_NAME}`\n" +
