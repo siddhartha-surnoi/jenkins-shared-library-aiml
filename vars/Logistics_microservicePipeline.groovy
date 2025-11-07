@@ -9,21 +9,30 @@ def call(Map config) {
 
         stages {
 
+            // ================================================
+            // Checkout Stage with full commit fetch
+            // ================================================
             stage('Checkout') {
                 steps {
-                    checkout scm
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.BRANCH_NAME]],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [
+                            [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10]
+                        ],
+                        userRemoteConfigs: [[url: config.repo]]
+                    ])
                     script {
-                        // Get full commit hash, fallback to short if needed
-                        def commit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
-                        if (!commit) {
-                            commit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
-                        }
-                        env.GIT_COMMIT = commit
+                        env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                         echo "Checked out commit: ${env.GIT_COMMIT}"
                     }
                 }
             }
 
+            // ================================================
+            // Build Stage
+            // ================================================
             stage('Build') {
                 steps {
                     echo "Building ${config.project}/${config.component} for branch: ${env.BRANCH_NAME}"
@@ -31,6 +40,9 @@ def call(Map config) {
                 }
             }
 
+            // ================================================
+            // Code & Security Scans (Parallel)
+            // ================================================
             stage('Code & Security Scans') {
                 when {
                     anyOf {
@@ -66,6 +78,9 @@ def call(Map config) {
                 }
             }
 
+            // ================================================
+            // Quality Gate
+            // ================================================
             stage('Quality Gate') {
                 when {
                     anyOf {
@@ -80,6 +95,9 @@ def call(Map config) {
                 }
             }
 
+            // ================================================
+            // Docker Build & Push (only for master/release)
+            // ================================================
             stage('Build & Push Docker Image') {
                 when {
                     anyOf {
@@ -105,6 +123,9 @@ def call(Map config) {
                 }
             }
 
+            // ================================================
+            // ECR Image Scan
+            // ================================================
             stage('ECR Image Scan') {
                 when {
                     anyOf {
@@ -129,6 +150,9 @@ def call(Map config) {
             }
         }
 
+        // ================================================
+        // Post Actions (Teams Notifications)
+        // ================================================
         post {
             always { echo "Build completed at: ${new Date()}" }
 
@@ -140,7 +164,7 @@ def call(Map config) {
     }
 }
 
-// Helper function to send Teams notifications
+// ====================== Helper: Teams Notifications ======================
 def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
         script {
@@ -163,6 +187,7 @@ def notifyTeams(String status) {
     }
 }
 
+// ====================== Helper: Status Color ======================
 def statusColor(String status) {
     switch(status) {
         case 'SUCCESS': return '#00FF00'
