@@ -13,7 +13,13 @@ def call(Map config) {
                 steps {
                     checkout scm
                     script {
-                        env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        // Get full commit hash, fallback to short if needed
+                        def commit = sh(script: "git rev-parse HEAD", returnStdout: true).trim()
+                        if (!commit) {
+                            commit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        }
+                        env.GIT_COMMIT = commit
+                        echo "Checked out commit: ${env.GIT_COMMIT}"
                     }
                 }
             }
@@ -28,7 +34,7 @@ def call(Map config) {
             stage('Code & Security Scans') {
                 when {
                     anyOf {
-                        expression { env.BRANCH_NAME ==~ /feature.*/ } // feature branches (feature_*, feature/1, etc.)
+                        expression { env.BRANCH_NAME ==~ /feature.*/ } 
                         expression { env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'release/dev' || env.BRANCH_NAME == 'release/qa' }
                     }
                 }
@@ -137,20 +143,23 @@ def call(Map config) {
 // Helper function to send Teams notifications
 def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
-        def gitAuthorName = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
-        def gitAuthorEmail = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
+        script {
+            def gitCommit = env.GIT_COMMIT ?: 'N/A'
+            def gitAuthorName = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
+            def gitAuthorEmail = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
 
-        office365ConnectorSend(
-            message: "*Build ${status}* for branch `${env.BRANCH_NAME}`\n" +
-                     "Commit: `${env.GIT_COMMIT}`\n" +
-                     "Author: `${gitAuthorName}`\n" +
-                     "Email: `${gitAuthorEmail}`\n" +
-                     "Job: `${env.JOB_NAME}` #${env.BUILD_NUMBER}\n" +
-                     "[View Build](${env.BUILD_URL})",
-            color: statusColor(status),
-            status: status,
-            webhookUrl: WEBHOOK_URL
-        )
+            office365ConnectorSend(
+                message: "*Build ${status}* for branch `${env.BRANCH_NAME}`\n" +
+                         "Commit: `${gitCommit}`\n" +
+                         "Author: `${gitAuthorName}`\n" +
+                         "Email: `${gitAuthorEmail}`\n" +
+                         "Job: `${env.JOB_NAME}` #${env.BUILD_NUMBER}\n" +
+                         "[View Build](${env.BUILD_URL})",
+                color: statusColor(status),
+                status: status,
+                webhookUrl: WEBHOOK_URL
+            )
+        }
     }
 }
 
