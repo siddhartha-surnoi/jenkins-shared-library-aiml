@@ -3,39 +3,25 @@ def call(Map config) {
     pipeline {
         agent { label config.agentLabel }
 
-        environment {
-            GIT_COMMIT = ''
-            GIT_AUTHOR_NAME = ''
-            GIT_AUTHOR_EMAIL = ''
-        }
-
         stages {
 
             // ================================================
-            // Checkout Stage with robust full clone
+            // Checkout Stage
             // ================================================
             stage('Checkout') {
                 steps {
+                    // Checkout the branch that triggered the multibranch pipeline
+                    checkout scm
+
                     script {
-                        // Clean workspace to avoid stale refs
-                        deleteDir()
+                        echo "Jenkins Git Info:"
+                        echo "Branch: ${env.BRANCH_NAME}"
+                        echo "Commit: ${env.GIT_COMMIT}"
+                        echo "Git Branch: ${env.GIT_BRANCH}"
 
-                        checkout([
-                            $class: 'GitSCM',
-                            branches: [[name: env.BRANCH_NAME]],
-                            userRemoteConfigs: [[url: config.repo]],
-                            extensions: [
-                                [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10],
-                                [$class: 'LocalBranch', localBranch: env.BRANCH_NAME]
-                            ]
-                        ])
-
-                        // Capture commit and author info
-                        env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        // Optionally capture author info using git commands
                         env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
-
-                        echo "Checked out commit: ${env.GIT_COMMIT} by ${env.GIT_AUTHOR_NAME} <${env.GIT_AUTHOR_EMAIL}>"
                     }
                 }
             }
@@ -56,7 +42,7 @@ def call(Map config) {
             stage('Code & Security Scans') {
                 when {
                     anyOf {
-                        expression { env.BRANCH_NAME ==~ /feature.*/ }
+                        expression { env.BRANCH_NAME ==~ /feature.*/ } 
                         expression { env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'release/dev' || env.BRANCH_NAME == 'release/qa' }
                     }
                 }
