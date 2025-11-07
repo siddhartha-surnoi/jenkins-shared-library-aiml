@@ -10,14 +10,22 @@ def call(Map config) {
         stages {
 
             // ================================================
-            // Checkout Stage using Jenkins SCM
+            // Checkout Stage with full clone and commit capture
             // ================================================
             stage('Checkout') {
                 steps {
-                    checkout scm
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: env.BRANCH_NAME]],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [
+                            [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10]
+                        ],
+                        userRemoteConfigs: [[url: config.repo]]
+                    ])
                     script {
-                        // Use Jenkins provided environment variable for commit
-                        env.GIT_COMMIT = env.GIT_COMMIT ?: 'N/A'
+                        // Capture the commit of the branch that triggered the build
+                        env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
                         echo "Checked out commit: ${env.GIT_COMMIT}"
                     }
                 }
@@ -89,7 +97,7 @@ def call(Map config) {
             }
 
             // ================================================
-            // Docker Build & Push (only for master/release)
+            // Docker Build & Push (only for master/release branches)
             // ================================================
             stage('Build & Push Docker Image') {
                 when {
@@ -161,7 +169,6 @@ def call(Map config) {
 def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
         script {
-            // Use Jenkins GIT_COMMIT environment variable
             def gitCommit = env.GIT_COMMIT ?: 'N/A'
             def gitAuthorName = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
             def gitAuthorEmail = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
