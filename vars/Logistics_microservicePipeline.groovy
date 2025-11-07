@@ -10,21 +10,14 @@ def call(Map config) {
         stages {
 
             // ================================================
-            // Checkout Stage with full commit fetch
+            // Checkout Stage using Jenkins SCM
             // ================================================
             stage('Checkout') {
                 steps {
-                    checkout([
-                        $class: 'GitSCM',
-                        branches: [[name: env.BRANCH_NAME]],
-                        doGenerateSubmoduleConfigurations: false,
-                        extensions: [
-                            [$class: 'CloneOption', shallow: false, depth: 0, noTags: false, reference: '', timeout: 10]
-                        ],
-                        userRemoteConfigs: [[url: config.repo]]
-                    ])
+                    checkout scm
                     script {
-                        env.GIT_COMMIT = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                        // Use Jenkins provided environment variable for commit
+                        env.GIT_COMMIT = env.GIT_COMMIT ?: 'N/A'
                         echo "Checked out commit: ${env.GIT_COMMIT}"
                     }
                 }
@@ -168,6 +161,7 @@ def call(Map config) {
 def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
         script {
+            // Use Jenkins GIT_COMMIT environment variable
             def gitCommit = env.GIT_COMMIT ?: 'N/A'
             def gitAuthorName = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
             def gitAuthorEmail = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
