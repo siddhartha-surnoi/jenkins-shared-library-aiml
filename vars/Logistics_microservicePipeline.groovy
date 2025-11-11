@@ -1,38 +1,12 @@
-// vars/Logistics_microservicePipeline.groovy
 def call(Map config) {
     pipeline {
         agent { label config.agentLabel }
 
         environment {
-            AWS_REGION = config.awsRegion ?: 'us-east-2'
+            AWS_REGION = 'ap-south-1'
         }
 
         stages {
-
-            // ================================================
-            // Docker Permission Check (Agent Setup)
-            // ================================================
-            stage('Docker Permission Check') {
-                steps {
-                    script {
-                        echo "Checking Docker permissions..."
-                        def result = sh(script: "docker ps > /dev/null 2>&1 || echo 'fail'", returnStdout: true).trim()
-                        if (result == 'fail') {
-                            echo "Granting Docker access to ubuntu user..."
-                            sh '''
-                                if ! getent group docker >/dev/null; then
-                                    sudo groupadd docker
-                                fi
-                                sudo usermod -aG docker ubuntu
-                                sudo systemctl restart docker || true
-                                newgrp docker || true
-                            '''
-                        } else {
-                            echo "Docker access verified."
-                        }
-                    }
-                }
-            }
 
             // ================================================
             // Checkout Stage
@@ -45,7 +19,6 @@ def call(Map config) {
                         echo "Jenkins Git Info:"
                         echo "Branch: ${env.BRANCH_NAME}"
                         echo "Commit: ${env.GIT_COMMIT}"
-                        echo "Git Branch: ${env.GIT_BRANCH}"
 
                         env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
@@ -80,10 +53,10 @@ def call(Map config) {
                             echo "Running SonarQube analysis..."
                             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                                 withSonarQubeEnv('SonarQube-Server') {
-                                    sh '''
+                                    sh """
                                         ${scannerHome}/bin/sonar-scanner \
                                         -Dsonar.login=$SONAR_TOKEN
-                                    '''
+                                    """
                                 }
                             }
                         }
@@ -138,12 +111,9 @@ def call(Map config) {
 
                             echo "Checking if ECR repo exists..."
                             def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ${env.AWS_REGION} >/dev/null 2>&1", returnStatus: true)
-
                             if (repoExists != 0) {
                                 echo "Creating new ECR repository: ${ecrRepoName}"
                                 sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ${env.AWS_REGION}"
-                            } else {
-                                echo "ECR repository already exists: ${ecrRepoName}"
                             }
 
                             echo "Logging into ECR..."
