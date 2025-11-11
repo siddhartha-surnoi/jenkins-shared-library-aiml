@@ -2,24 +2,17 @@ def call(Map config) {
     pipeline {
         agent { label config.agentLabel }
 
-        environment {
-            AWS_REGION = 'ap-south-1'
-        }
-
         stages {
-
             // ================================================
             // Checkout Stage
             // ================================================
             stage('Checkout') {
                 steps {
                     checkout scm
-
                     script {
                         echo "Jenkins Git Info:"
                         echo "Branch: ${env.BRANCH_NAME}"
                         echo "Commit: ${env.GIT_COMMIT}"
-
                         env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
                     }
@@ -53,10 +46,7 @@ def call(Map config) {
                             echo "Running SonarQube analysis..."
                             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                                 withSonarQubeEnv('SonarQube-Server') {
-                                    sh """
-                                        ${scannerHome}/bin/sonar-scanner \
-                                        -Dsonar.login=$SONAR_TOKEN
-                                    """
+                                    sh """${scannerHome}/bin/sonar-scanner -Dsonar.login=$SONAR_TOKEN"""
                                 }
                             }
                         }
@@ -103,28 +93,26 @@ def call(Map config) {
                     }
                 }
                 steps {
-                    withAWS(credentials: 'aws-credentials', region: "${env.AWS_REGION}") {
-                        script {
-                            def ecrRepoName = "${config.project}/${config.component}"
-                            def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
-                            def ecrUri = "${awsAccountId}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${ecrRepoName}"
+                    script {
+                        def ecrRepoName = "${config.project}/${config.component}"
+                        def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text --region ap-south-1", returnStdout: true).trim()
+                        def ecrUri = "${awsAccountId}.dkr.ecr.ap-south-1.amazonaws.com/${ecrRepoName}"
 
-                            echo "Checking if ECR repo exists..."
-                            def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ${env.AWS_REGION} >/dev/null 2>&1", returnStatus: true)
-                            if (repoExists != 0) {
-                                echo "Creating new ECR repository: ${ecrRepoName}"
-                                sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ${env.AWS_REGION}"
-                            }
-
-                            echo "Logging into ECR..."
-                            sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}"
-
-                            echo "Building and pushing Docker image..."
-                            sh """
-                                docker build -t ${ecrUri}:latest .
-                                docker push ${ecrUri}:latest
-                            """
+                        echo "Checking if ECR repo exists..."
+                        def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ap-south-1 >/dev/null 2>&1", returnStatus: true)
+                        if (repoExists != 0) {
+                            echo "Creating new ECR repository: ${ecrRepoName}"
+                            sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ap-south-1"
                         }
+
+                        echo "Logging into ECR..."
+                        sh "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin ${ecrUri}"
+
+                        echo "Building and pushing Docker image..."
+                        sh """
+                            docker build -t ${ecrUri}:latest .
+                            docker push ${ecrUri}:latest
+                        """
                     }
                 }
             }
@@ -141,17 +129,15 @@ def call(Map config) {
                     }
                 }
                 steps {
-                    withAWS(credentials: 'aws-credentials', region: "${env.AWS_REGION}") {
-                        script {
-                            def ecrRepoName = "${config.project}/${config.component}"
-                            echo "Starting ECR image scan..."
-                            sh """
-                                aws ecr start-image-scan \
-                                    --repository-name ${ecrRepoName} \
-                                    --image-id imageTag=latest \
-                                    --region ${env.AWS_REGION} || true
-                            """
-                        }
+                    script {
+                        def ecrRepoName = "${config.project}/${config.component}"
+                        echo "Starting ECR image scan..."
+                        sh """
+                            aws ecr start-image-scan \
+                                --repository-name ${ecrRepoName} \
+                                --image-id imageTag=latest \
+                                --region ap-south-1 || true
+                        """
                     }
                 }
             }
@@ -162,7 +148,6 @@ def call(Map config) {
         // ================================================
         post {
             always { echo "Build completed at: ${new Date()}" }
-
             success { notifyTeams('SUCCESS') }
             failure { notifyTeams('FAILURE') }
             unstable { notifyTeams('UNSTABLE') }
@@ -178,13 +163,12 @@ def notifyTeams(String status) {
             def gitCommit = env.GIT_COMMIT ?: 'N/A'
             def gitAuthorName = env.GIT_AUTHOR_NAME ?: 'N/A'
             def gitAuthorEmail = env.GIT_AUTHOR_EMAIL ?: 'N/A'
-
             office365ConnectorSend(
-                message: "*Build ${status}* for branch `${env.BRANCH_NAME}`\n" +
-                         "Commit: `${gitCommit}`\n" +
-                         "Author: `${gitAuthorName}`\n" +
-                         "Email: `${gitAuthorEmail}`\n" +
-                         "Job: `${env.JOB_NAME}` #${env.BUILD_NUMBER}\n" +
+                message: "*Build ${status}* for branch ${env.BRANCH_NAME}\n" +
+                         "Commit: ${gitCommit}\n" +
+                         "Author: ${gitAuthorName}\n" +
+                         "Email: ${gitAuthorEmail}\n" +
+                         "Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
                          "[View Build](${env.BUILD_URL})",
                 color: statusColor(status),
                 status: status,
@@ -204,3 +188,4 @@ def statusColor(String status) {
         default: return '#000000'
     }
 }
+
