@@ -10,7 +10,6 @@ def call(Map config) {
             // ================================================
             stage('Checkout') {
                 steps {
-                    // Checkout the branch that triggered the multibranch pipeline
                     checkout scm
 
                     script {
@@ -19,7 +18,6 @@ def call(Map config) {
                         echo "Commit: ${env.GIT_COMMIT}"
                         echo "Git Branch: ${env.GIT_BRANCH}"
 
-                        // Optionally capture author info using git commands
                         env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
                         env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
                     }
@@ -43,7 +41,7 @@ def call(Map config) {
                 when {
                     anyOf {
                         expression { env.BRANCH_NAME ==~ /feature.*/ } 
-                        expression { env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'release/dev' || env.BRANCH_NAME == 'release/qa' }
+                        expression { env.BRANCH_NAME in ['master', 'release/dev', 'release/qa'] }
                     }
                 }
                 parallel {
@@ -81,7 +79,7 @@ def call(Map config) {
                 when {
                     anyOf {
                         expression { env.BRANCH_NAME ==~ /feature.*/ }
-                        expression { env.BRANCH_NAME == 'master' || env.BRANCH_NAME == 'release/dev' || env.BRANCH_NAME == 'release/qa' }
+                        expression { env.BRANCH_NAME in ['master', 'release/dev', 'release/qa'] }
                     }
                 }
                 steps {
@@ -105,7 +103,7 @@ def call(Map config) {
                 steps {
                     withCredentials([
                         string(credentialsId: 'aws-region', variable: 'AWS_REGION'),
-                        string(credentialsId: 'ecr-repo', variable: 'ECR_REPO')
+                        string(credentialsId: config.ecrRepoCredential ?: 'ecr-repo-user', variable: 'ECR_REPO')
                     ]) {
                         script {
                             echo "Building and pushing Docker image to ECR..."
@@ -131,7 +129,10 @@ def call(Map config) {
                     }
                 }
                 steps {
-                    withCredentials([string(credentialsId: 'aws-region', variable: 'AWS_REGION')]) {
+                    withCredentials([
+                        string(credentialsId: 'aws-region', variable: 'AWS_REGION'),
+                        string(credentialsId: config.ecrRepoCredential ?: 'ecr-repo-user', variable: 'ECR_REPO')
+                    ]) {
                         script {
                             echo "Starting ECR image scan for 'latest'..."
                             sh '''
