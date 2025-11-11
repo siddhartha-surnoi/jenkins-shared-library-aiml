@@ -3,6 +3,10 @@ def call(Map config) {
     pipeline {
         agent { label config.agentLabel }
 
+        environment {
+            AWS_REGION = config.awsRegion ?: 'us-east-2'
+        }
+
         stages {
 
             // ================================================
@@ -90,7 +94,7 @@ def call(Map config) {
             }
 
             // ================================================
-            // Docker Build & Push (only for master/release branches)
+            // Docker Build & Push (auto-create ECR)
             // ================================================
             stage('Build & Push Docker Image') {
                 when {
@@ -101,17 +105,30 @@ def call(Map config) {
                     }
                 }
                 steps {
-                    withCredentials([
-                        string(credentialsId: 'aws-region', variable: 'AWS_REGION'),
-                        string(credentialsId: config.ecrRepoCredential ?: 'ecr-repo-user', variable: 'ECR_REPO')
-                    ]) {
+                    withAWS(credentials: 'aws-credentials', region: "${env.AWS_REGION}") {
                         script {
-                            echo "Building and pushing Docker image to ECR..."
-                            sh '''
-                                aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REPO
-                                docker build -t $ECR_REPO:latest .
-                                docker push $ECR_REPO:latest
-                            '''
+                            def ecrRepoName = "${config.project}/${config.component}"
+                            def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
+                            def ecrUri = "${awsAccountId}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${ecrRepoName}"
+
+                            echo " Checking ECR repo existence..."
+                            def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ${env.AWS_REGION} >/dev/null 2>&1", returnStatus: true)
+
+                            if (repoExists != 0) {
+                                echo " Creating ECR repository: ${ecrRepoName}"
+                                sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ${env.AWS_REGION}"
+                            } else {
+                                echo " ECR repository already exists: ${ecrRepoName}"
+                            }
+
+                            echo " Logging into ECR..."
+                            sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}"
+
+                            echo " Building and pushing Docker image to ECR..."
+                            sh """
+                                docker build -t ${ecrUri}:latest .
+                                docker push ${ecrUri}:latest
+                            """
                         }
                     }
                 }
@@ -129,18 +146,19 @@ def call(Map config) {
                     }
                 }
                 steps {
-                    withCredentials([
-                        string(credentialsId: 'aws-region', variable: 'AWS_REGION'),
-                        string(credentialsId: config.ecrRepoCredential ?: 'ecr-repo-user', variable: 'ECR_REPO')
-                    ]) {
+                    withAWS(credentials: 'aws-credentials', region: "${env.AWS_REGION}") {
                         script {
-                            echo "Starting ECR image scan for 'latest'..."
-                            sh '''
+                            def ecrRepoName = "${config.project}/${config.component}"
+                            def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
+                            def ecrUri = "${awsAccountId}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${ecrRepoName}"
+
+                            echo " Starting ECR image scan for 'latest'..."
+                            sh """
                                 aws ecr start-image-scan \
-                                    --repository-name ${ECR_REPO} \
+                                    --repository-name ${ecrRepoName} \
                                     --image-id imageTag=latest \
-                                    --region $AWS_REGION || true
-                            '''
+                                    --region ${env.AWS_REGION} || true
+                            """
                         }
                     }
                 }
