@@ -10,6 +10,31 @@ def call(Map config) {
         stages {
 
             // ================================================
+            // Docker Permission Check (Agent Setup)
+            // ================================================
+            stage('Docker Permission Check') {
+                steps {
+                    script {
+                        echo "Checking Docker permissions..."
+                        def result = sh(script: "docker ps > /dev/null 2>&1 || echo 'fail'", returnStdout: true).trim()
+                        if (result == 'fail') {
+                            echo "Granting Docker access to ubuntu user..."
+                            sh '''
+                                if ! getent group docker >/dev/null; then
+                                    sudo groupadd docker
+                                fi
+                                sudo usermod -aG docker ubuntu
+                                sudo systemctl restart docker || true
+                                newgrp docker || true
+                            '''
+                        } else {
+                            echo "Docker access verified."
+                        }
+                    }
+                }
+            }
+
+            // ================================================
             // Checkout Stage
             // ================================================
             stage('Checkout') {
@@ -44,7 +69,7 @@ def call(Map config) {
             stage('Code & Security Scans') {
                 when {
                     anyOf {
-                        expression { env.BRANCH_NAME ==~ /feature.*/ } 
+                        expression { env.BRANCH_NAME ==~ /feature.*/ }
                         expression { env.BRANCH_NAME in ['master', 'release/dev', 'release/qa'] }
                     }
                 }
@@ -94,7 +119,7 @@ def call(Map config) {
             }
 
             // ================================================
-            // Docker Build & Push (auto-create ECR)
+            // Build & Push Docker Image (Auto ECR Create)
             // ================================================
             stage('Build & Push Docker Image') {
                 when {
@@ -111,20 +136,20 @@ def call(Map config) {
                             def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
                             def ecrUri = "${awsAccountId}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${ecrRepoName}"
 
-                            echo " Checking ECR repo existence..."
+                            echo "Checking if ECR repo exists..."
                             def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ${env.AWS_REGION} >/dev/null 2>&1", returnStatus: true)
 
                             if (repoExists != 0) {
-                                echo " Creating ECR repository: ${ecrRepoName}"
+                                echo "Creating new ECR repository: ${ecrRepoName}"
                                 sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ${env.AWS_REGION}"
                             } else {
-                                echo " ECR repository already exists: ${ecrRepoName}"
+                                echo "ECR repository already exists: ${ecrRepoName}"
                             }
 
-                            echo " Logging into ECR..."
+                            echo "Logging into ECR..."
                             sh "aws ecr get-login-password --region ${env.AWS_REGION} | docker login --username AWS --password-stdin ${ecrUri}"
 
-                            echo " Building and pushing Docker image to ECR..."
+                            echo "Building and pushing Docker image..."
                             sh """
                                 docker build -t ${ecrUri}:latest .
                                 docker push ${ecrUri}:latest
@@ -149,10 +174,7 @@ def call(Map config) {
                     withAWS(credentials: 'aws-credentials', region: "${env.AWS_REGION}") {
                         script {
                             def ecrRepoName = "${config.project}/${config.component}"
-                            def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text", returnStdout: true).trim()
-                            def ecrUri = "${awsAccountId}.dkr.ecr.${env.AWS_REGION}.amazonaws.com/${ecrRepoName}"
-
-                            echo " Starting ECR image scan for 'latest'..."
+                            echo "Starting ECR image scan..."
                             sh """
                                 aws ecr start-image-scan \
                                     --repository-name ${ecrRepoName} \
