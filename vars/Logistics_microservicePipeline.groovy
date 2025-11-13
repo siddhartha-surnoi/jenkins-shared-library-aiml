@@ -3,47 +3,23 @@ def call(Map config) {
         agent { label config.agentLabel }
 
         stages {
-            // ================================================
-            // Checkout Stage
-            // ================================================
-            stage('Checkout') {
-                steps {
-                    checkout scm
-                    script {
-                        echo "Jenkins Git Info:"
-                        echo "Branch: ${env.BRANCH_NAME}"
-                        echo "Commit: ${env.GIT_COMMIT}"
-                        env.GIT_AUTHOR_NAME = sh(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
-                        env.GIT_AUTHOR_EMAIL = sh(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
-                    }
-                }
-            }
-
-            // ================================================
-            // Build Stage
-            // ================================================
             stage('Build') {
                 steps {
-                    echo "Building ${config.project}/${config.component} for branch: ${env.BRANCH_NAME}"
                     sh 'mvn clean package -DskipTests'
                 }
             }
 
-            // ================================================
-            // Code & Security Scans (Parallel)
-            // ================================================
             stage('Code & Security Scans') {
                 when {
                     anyOf {
                         expression { env.BRANCH_NAME ==~ /feature.*/ }
-                        expression { env.BRANCH_NAME in ['master', 'release/dev', 'release/qa'] }
+                        expression { env.BRANCH_NAME == 'release/dev' }
                     }
                 }
                 parallel {
                     stage('SonarQube Scan') {
                         environment { scannerHome = tool 'sonar-7.2' }
                         steps {
-                            echo "Running SonarQube analysis..."
                             withCredentials([string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN')]) {
                                 withSonarQubeEnv('SonarQube-Server') {
                                     sh """${scannerHome}/bin/sonar-scanner -Dsonar.login=$SONAR_TOKEN"""
@@ -54,61 +30,48 @@ def call(Map config) {
 
                     stage('Dependabot Scan') {
                         steps {
-                            echo "Running Dependabot scan simulation..."
-                            sh '''
-                                echo "Fetching Dependabot alerts for repository..."
-                                echo "Dependabot scan completed (simulated)."
-                            '''
+                            sh 'echo "Dependabot scan completed (simulated)."'
                         }
                     }
                 }
             }
 
-            // ================================================
-            // Quality Gate
-            // ================================================
             stage('Quality Gate') {
                 when {
                     anyOf {
                         expression { env.BRANCH_NAME ==~ /feature.*/ }
-                        expression { env.BRANCH_NAME in ['master', 'release/dev', 'release/qa'] }
+                        expression { env.BRANCH_NAME == 'release/dev' }
                     }
                 }
                 steps {
-                    timeout(time: 3, unit: 'MINUTES') {
+                    timeout(time: 1, unit: 'HOURS') {
                         waitForQualityGate abortPipeline: true
                     }
                 }
             }
 
-            // ================================================
-            // Build & Push Docker Image (Auto ECR Create)
-            // ================================================
             stage('Build & Push Docker Image') {
                 when {
-                    anyOf {
-                        expression { env.BRANCH_NAME == 'master' }
-                        expression { env.BRANCH_NAME == 'release/dev' }
-                        expression { env.BRANCH_NAME == 'release/qa' }
-                    }
+                    expression { env.BRANCH_NAME == 'release/dev' }
                 }
                 steps {
                     script {
                         def ecrRepoName = "${config.project}/${config.component}"
-                        def awsAccountId = sh(script: "aws sts get-caller-identity --query Account --output text --region ap-south-1", returnStdout: true).trim()
+                        def awsAccountId = sh(
+                            script: "aws sts get-caller-identity --query Account --output text --region ap-south-1",
+                            returnStdout: true
+                        ).trim()
                         def ecrUri = "${awsAccountId}.dkr.ecr.ap-south-1.amazonaws.com/${ecrRepoName}"
 
-                        echo "Checking if ECR repo exists..."
-                        def repoExists = sh(script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ap-south-1 >/dev/null 2>&1", returnStatus: true)
+                        def repoExists = sh(
+                            script: "aws ecr describe-repositories --repository-names ${ecrRepoName} --region ap-south-1 >/dev/null 2>&1",
+                            returnStatus: true
+                        )
                         if (repoExists != 0) {
-                            echo "Creating new ECR repository: ${ecrRepoName}"
                             sh "aws ecr create-repository --repository-name ${ecrRepoName} --region ap-south-1"
                         }
 
-                        echo "Logging into ECR..."
                         sh "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin ${ecrUri}"
-
-                        echo "Building and pushing Docker image..."
                         sh """
                             docker build -t ${ecrUri}:latest .
                             docker push ${ecrUri}:latest
@@ -117,21 +80,13 @@ def call(Map config) {
                 }
             }
 
-            // ================================================
-            // ECR Image Scan
-            // ================================================
             stage('ECR Image Scan') {
                 when {
-                    anyOf {
-                        expression { env.BRANCH_NAME == 'master' }
-                        expression { env.BRANCH_NAME == 'release/dev' }
-                        expression { env.BRANCH_NAME == 'release/qa' }
-                    }
+                    expression { env.BRANCH_NAME == 'release/dev' }
                 }
                 steps {
                     script {
                         def ecrRepoName = "${config.project}/${config.component}"
-                        echo "Starting ECR image scan..."
                         sh """
                             aws ecr start-image-scan \
                                 --repository-name ${ecrRepoName} \
@@ -143,11 +98,10 @@ def call(Map config) {
             }
         }
 
-        // ================================================
-        // Post Actions (Teams Notifications)
-        // ================================================
         post {
-            always { echo "Build completed at: ${new Date()}" }
+            always {
+                cleanWs() // safely cleans workspace after build
+            }
             success { notifyTeams('SUCCESS') }
             failure { notifyTeams('FAILURE') }
             unstable { notifyTeams('UNSTABLE') }
@@ -156,18 +110,13 @@ def call(Map config) {
     }
 }
 
-// ====================== Helper: Teams Notifications ======================
 def notifyTeams(String status) {
     withCredentials([string(credentialsId: 'teams-webhook', variable: 'WEBHOOK_URL')]) {
         script {
             def gitCommit = env.GIT_COMMIT ?: 'N/A'
-            def gitAuthorName = env.GIT_AUTHOR_NAME ?: 'N/A'
-            def gitAuthorEmail = env.GIT_AUTHOR_EMAIL ?: 'N/A'
             office365ConnectorSend(
                 message: "*Build ${status}* for branch ${env.BRANCH_NAME}\n" +
                          "Commit: ${gitCommit}\n" +
-                         "Author: ${gitAuthorName}\n" +
-                         "Email: ${gitAuthorEmail}\n" +
                          "Job: ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
                          "[View Build](${env.BUILD_URL})",
                 color: statusColor(status),
@@ -178,9 +127,8 @@ def notifyTeams(String status) {
     }
 }
 
-// ====================== Helper: Status Color ======================
 def statusColor(String status) {
-    switch(status) {
+    switch (status) {
         case 'SUCCESS': return '#00FF00'
         case 'FAILURE': return '#FF0000'
         case 'UNSTABLE': return '#FFA500'
@@ -188,4 +136,3 @@ def statusColor(String status) {
         default: return '#000000'
     }
 }
-
